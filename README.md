@@ -1,6 +1,6 @@
 # od-matrix-completion
 
-Установка uv-окружения:
+Установка [uv](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer)-окружения:
 ```bash
 uv python install 3.13
 uv venv
