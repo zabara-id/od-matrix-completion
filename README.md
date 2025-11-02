@@ -16,3 +16,8 @@ uv sync
 ```bash
 uv add package_name
 ```
+
+Если добавил не то:
+```bash
+uv remove package_name
+```
