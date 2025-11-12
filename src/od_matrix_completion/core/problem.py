@@ -61,7 +61,6 @@ class Problem:
 
         m, n = self.A.shape
         n_zones = None
-        # Prefer explicit hints from D_hat/L/W if available
         if self.D_hat is not None:
             if self.D_hat.ndim != 2 or self.D_hat.shape[0] != self.D_hat.shape[1]:
                 raise ValueError("D_hat must be a square 2D array")
@@ -156,7 +155,7 @@ class Problem:
         else:
             raise RuntimeError("Unsupported model selected")
 
-        # Добавить градиент регуляризации KL, если задана
+        # Градиент KL-регуляризации
         if self.gamma > 0.0 and self.D_hat is not None:
             D = d.reshape(dims.n_zones, dims.n_zones)
             grad = grad + self.gamma * safe_log_ratio(D, self.D_hat).reshape(-1)
@@ -284,19 +283,26 @@ class Problem:
         x0: Optional[NDArray[np.float64]] = None,
         callback: Optional[callable] = None,
     ) -> OptimizationResult:
-         # Ранняя проверка размерностей
+        
         dims = self.validate()
         _ = dims  # unused variable, validation is the main point
 
-        algo = algorithm or self._algo
+        algo = algorithm or self.algorithm
         if algo is None:
-            raise RuntimeError("Не задан оптимизатор. Передайте его в solve(...) или вызовите set_algorithm(...)")
+            raise RuntimeError("Не задан оптимизатор. Передайте его в solve(...) или присвойте problem.algorithm = optimizer")
 
         return algo.fit(self, x0=x0, callback=callback)
 
-    def set_algorithm(self, algo: BaseOptimizer) -> None:
-        """Установить оптимизатор (экземпляр класса-наследника BaseOptimizer)."""
+    @property
+    def algorithm(self) -> Optional[BaseOptimizer]:
+        """Текущий оптимизатор задачи (может быть None)."""
+        return self._algo
 
+    @algorithm.setter
+    def algorithm(self, algo: Optional[BaseOptimizer]) -> None:
+        if algo is None:
+            self._algo = None
+            return
         if not isinstance(algo, BaseOptimizer):
             raise TypeError("Ожидается экземпляр класса-наследника BaseOptimizer")
         self._algo = algo
