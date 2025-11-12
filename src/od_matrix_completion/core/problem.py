@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-import math
 import numpy as np
+from numpy.typing import NDArray
 
 from .base_algo import BaseOptimizer, OptimizationResult
 
@@ -34,30 +34,6 @@ class Problem:
       - Помогает с векторизацией d = vec(D) и обратно.
       - Считает целевую и градиент для линейного случая.
       - Вызывает переданный алгоритм-оптимизатор.
-
-    Векторизация: d = D.reshape(-1), D = d.reshape(n_zones, n_zones).
-
-    Пример использования (минимальный):
-
-        >>> import numpy as np
-        >>> from od_matrix_completion.core.problem import Problem
-        >>> from od_matrix_completion.core.base import BaseOptimizer, OptimizationResult
-        >>>
-        >>> class DummyOptimizer(BaseOptimizer):
-        ...     def fit(self, problem: Problem, x0=None, callback=None) -> OptimizationResult:
-        ...         D0 = problem.initial_guess()
-        ...         d0 = D0.reshape(-1)
-        ...         return OptimizationResult(D=D0, d=d0, objective=problem.objective(D0),
-        ...                                   n_iters=0, converged=True)
-        >>>
-        >>> n_z = 2
-        >>> A = np.eye(n_z * n_z)  # игрушечная маршрутизация
-        >>> f = np.array([1., 2., 3., 4.])
-        >>> D_hat = np.ones((n_z, n_z))
-        >>> prob = Problem(A=A, f_obs=f, D_hat=D_hat, gamma=0.1)
-        >>> result = prob.solve(algorithm=DummyOptimizer())
-        >>> result.D.shape
-        (2, 2)
     """
 
     def __init__(
@@ -81,7 +57,6 @@ class Problem:
 
         self._algo: Optional[BaseOptimizer] = None
 
-    # ---------------------------- Размерности -----------------------------
     def _infer_dimensions(self) -> Dimensions:
         if self.A is None:
             raise ValueError("A (routing matrix) must be provided to infer dimensions")
@@ -106,8 +81,7 @@ class Problem:
                     f"A has {n} columns, but marginals imply {n_zones*n_zones} OD pairs"
                 )
         else:
-            # Fallback: try to deduce from perfect square
-            root = int(round(math.sqrt(n)))
+            root = int(round(np.sqrt(n)))
             if root * root != n:
                 raise ValueError(
                     "Cannot infer n_zones: A's column count is not a perfect square, "
@@ -117,7 +91,6 @@ class Problem:
 
         return Dimensions(n_edges=m, n_zones=n_zones, n_od_pairs=n)
 
-    # -------------------------- Проверки данных ---------------------------
     def validate(self) -> Dimensions:
         dims = self._infer_dimensions()
 
@@ -242,12 +215,11 @@ class Problem:
 
     # ------------------------ Инициализация D ----------------------------
     def initial_guess(self) -> np.ndarray:
-        """Возвращает разумное начальное приближение D0.
+        """
+        Начальное приблиэение для матрицы корреспонденций
 
-        Приоритет:
-          1) D_hat, если задана;
-          2) IPF-проекция по маргиналиям, если заданы L и W;
-          3) равномерная матрица из единиц.
+        Returns:
+            np.ndarray: _description_
         """
 
         dims = self._infer_dimensions()
@@ -255,12 +227,10 @@ class Problem:
         if self.D_hat is not None:
             return np.maximum(self.D_hat, 0.0).astype(float, copy=True)
 
-        # If marginals are available, try IPF from a uniform seed
         if self.L is not None and self.W is not None:
             seed = np.ones((dims.n_zones, dims.n_zones), dtype=float)
             return self._ipf_to_marginals(seed, self.L, self.W)
 
-        # Fallback: uniform
         return np.ones((dims.n_zones, dims.n_zones), dtype=float)
 
     @staticmethod

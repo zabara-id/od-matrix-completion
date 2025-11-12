@@ -5,23 +5,24 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import numpy as np
+from numpy.typing import NDArray
 
 
 @dataclass
 class OptimizationResult:
-    """Результат работы оптимизатора.
+    """Результат работы алгоритма оптимизации.
 
-    Параметры:
-      - D: восстановленная OD-матрица (n_zones x n_zones)
-      - d: векторизация D (строчная, длина n_zones * n_zones)
-      - objective: значение целевой функции в конце (если есть)
-      - n_iters: число итераций
-      - converged: сошёлся ли метод
-      - history: список метрик по итерациям (произвольно)
+    Args:
+        D: восстановленная OD-матрица (n_zones x n_zones);
+        d: векторизация D (строчная, длина n_zones * n_zones);
+        objective: значение целевой функции в конце (если есть);
+        n_iters: число итераций;
+        converged: сошёлся ли метод;
+        history: список метрик по итерациям (произвольно).
     """
 
-    D: np.ndarray
-    d: np.ndarray
+    D: NDArray[np.float64]
+    d: NDArray[np.float64]
     objective: Optional[float] = None
     n_iters: int = 0
     converged: bool = False
@@ -29,10 +30,7 @@ class OptimizationResult:
 
 
 class BaseOptimizer(ABC):
-    """Базовый интерфейс для алгоритмов оптимизации OD-матрицы.
-
-    Ориентирован на линейный случай: f ≈ A @ d, где d = vec(D).
-    Конкретные алгоритмы должны реализовать метод ``fit``.
+    """Базовый интерфейс для алгоритмов оптимизации.
     """
 
     def __init__(
@@ -43,32 +41,38 @@ class BaseOptimizer(ABC):
         verbose: bool = False,
         random_state: Optional[int] = None,
     ) -> None:
+        """Конструктор класса.
+
+        Args:
+            max_iters (int, optional): Максимальное число итераций. По умолчанию 1000.
+            tol (float, optional): Точность. По умолчанию 1e-6.
+            verbose (bool, optional): Отладка (колбэк). По умолчанию False.
+            random_state (Optional[int], optional): _description_. По умолчанию None.
+        """
         self.max_iters = int(max_iters)
         self.tol = float(tol)
         self.verbose = bool(verbose)
         self.random_state = random_state
 
-    def supports(self, problem: "Problem") -> bool:  # noqa: F821 (forward ref)
-        """Можно ли решать данную задачу этим оптимизатором.
-
-        По умолчанию — да. Переопределяйте при необходимости.
-        """
-
-        return True
-
     @abstractmethod
     def fit(
         self,
-        problem: "Problem",  # noqa: F821 (forward ref)
-        x0: Optional[np.ndarray] = None,
+        problem: "Problem",
+        x0: Optional[NDArray[np.float64]] = None,
         callback: Optional[Callable[[dict[str, Any]], None]] = None,
     ) -> OptimizationResult:
-        """Запуск оптимизации и возврат результата.
+        """Абсирактный метод для запуска алгоритма оптимизации.    
 
-        Аргументы:
-          - problem: экземпляр задачи Problem
-          - x0: начальное приближение (d или D). Если None — алгоритм сам выберет.
-          - callback: опциональный колбэк с метриками по итерациям
+        Args:
+            problem (Problem): экземпляр задачи Problem;
+            x0 (Optional[NDArray[np.float64]], optional): начальное приближение (d или D). По умолчанию None.
+            callback (Optional[Callable[[dict[str, Any]], None]], optional): колбэк для отладки. По умолчанию None.
+
+        Raises:
+            NotImplementedError: не реализованный алгоритм.
+
+        Returns:
+            OptimizationResult: DTO с результатами оптимизации.
         """
-
+        
         raise NotImplementedError

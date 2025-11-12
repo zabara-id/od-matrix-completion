@@ -110,7 +110,6 @@ class KLProximalDescent(BaseOptimizer):
             if problem.D_hat is not None:
                 H = np.maximum(problem.D_hat, self.eps)
             else:
-                # если приор не задан, используем единичную матрицу (log(1)=0)
                 H = np.ones_like(D)
 
         for k in range(self.max_iters):
