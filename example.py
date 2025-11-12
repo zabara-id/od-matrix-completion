@@ -10,8 +10,8 @@ W = np.array([7.0, 7.0, 7.0])
 
 problem = Problem(
     model = "linear",
-    A=A, f_obs=f, D_hat=D_hat, L=L, W=W, gamma=0.1
-    )
+    A=A, f_obs=f, D_hat=D_hat, L=L, W=W, gamma=1e-3
+)
 
 optimizer = SubgradientDescent(
     step_size=1e-2,

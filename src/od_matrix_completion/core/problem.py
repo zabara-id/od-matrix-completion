@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -138,8 +137,7 @@ class Problem:
             )
         return d.reshape(dims.n_zones, dims.n_zones)
 
-    # --------------------- Линейная модель -------------------------------
-    def linear_prediction(self, d: np.ndarray) -> np.ndarray:
+    def prediction(self, d: np.ndarray) -> np.ndarray:
         match self.model:
             case "linear":
                 return _linear_prediction(self.A, d)
@@ -147,11 +145,35 @@ class Problem:
                 return _beckmann_prediction(d)
             case _:
                 raise RuntimeError("Unsupported model selected")
+    
+    def gradient(self, d: np.ndarray) -> np.ndarray:
+        dims = self.validate()
+        d = np.asarray(d, dtype=float).reshape(-1)
+
+        # Градиент по датчикам (данные) — без регуляризации
+        if self.model == "linear":
+            grad = _gradient_linear(
+                d,
+                A=self.A,
+                f_obs=self.f_obs,
+                sensor_weights=self.sensor_weights,
+            )
+        elif self.model == "beckmann":
+            grad = _gradient_beckmann(d)
+        else:
+            raise RuntimeError("Unsupported model selected")
+
+        # Добавить градиент регуляризации KL, если задана
+        if self.gamma > 0.0 and self.D_hat is not None:
+            D = d.reshape(dims.n_zones, dims.n_zones)
+            grad = grad + self.gamma * _safe_log_ratio(D, self.D_hat).reshape(-1)
+
+        return grad
 
     def weighted_residual(self, d: np.ndarray) -> np.ndarray:
         if self.f_obs is None:
             raise ValueError("f_obs must be set to compute residuals")
-        resid = self.linear_prediction(d) - self.f_obs
+        resid = self.prediction(d) - self.f_obs
         if self.sensor_weights is None:
             return resid
         return self.sensor_weights * resid
@@ -181,7 +203,7 @@ class Problem:
 
         # Невязка по счетчикам
         if self.f_obs is not None:
-            resid = self.linear_prediction(d) - self.f_obs
+            resid = self.prediction(d) - self.f_obs
             if self.sensor_weights is not None:
                 val += 0.5 * float(np.dot(self.sensor_weights * resid, resid))
             else:
@@ -198,31 +220,8 @@ class Problem:
 
         return val
 
-    def gradient_linear(self, d: np.ndarray) -> np.ndarray:
-        """Градиент линейной цели по d = vec(D).
+    
 
-        grad = A^T W (A d - f_obs) + gamma * vec(log(D / D_hat))
-        Второе слагаемое добавляется, только если задана D_hat и gamma > 0.
-        """
-
-        dims = self.validate()
-        match self.model:
-            case "linear":
-                return _gradient_linear(
-                    d,
-                    A=self.A,
-                    f_obs=self.f_obs,
-                    sensor_weights=self.sensor_weights,
-                    gamma=self.gamma,
-                    D_hat=self.D_hat,
-                    n_zones=dims.n_zones,
-                )
-            case "beckmann":
-                return _gradient_beckmann(d)
-            case _:
-                raise RuntimeError("Unsupported model selected")
-
-    # ------------------------ Инициализация D ----------------------------
     def initial_guess(self) -> np.ndarray:
         """
         Начальное приблиэение для матрицы корреспонденций
@@ -293,20 +292,13 @@ class Problem:
         x0: Optional[np.ndarray] = None,
         callback: Optional[callable] = None,
     ) -> OptimizationResult:
-        """Запускает переданный оптимизатор на этой задаче.
-
-        Если ``algorithm`` не задан, используется тот, что был установлен
-        заранее через ``set_algorithm(optimizer)``.
-        """
-
-        # Ранняя проверка размерностей
+         # Ранняя проверка размерностей
         dims = self.validate()
         _ = dims  # unused variable, validation is the main point
 
         algo = algorithm or self._algo
         if algo is None:
             raise RuntimeError("Не задан оптимизатор. Передайте его в solve(...) или вызовите set_algorithm(...)")
-  
 
         return algo.fit(self, x0=x0, callback=callback)
 

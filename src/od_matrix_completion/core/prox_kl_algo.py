@@ -62,7 +62,7 @@ class KLProximalDescent(BaseOptimizer):
 
     def _grad_data(self, problem: Problem, d: np.ndarray) -> np.ndarray:
         # градиент только по g(D): A^T W (A d - f)
-        resid = problem.linear_prediction(d)
+        resid = problem.prediction(d)
         if problem.f_obs is not None:
             resid = resid - problem.f_obs
         if problem.sensor_weights is not None:

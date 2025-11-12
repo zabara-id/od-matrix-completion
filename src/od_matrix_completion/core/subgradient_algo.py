@@ -104,7 +104,7 @@ class SubgradientDescent(BaseOptimizer):
 
         for k in range(self.max_iters):
             # Градиент (линейный случай)
-            g = problem.gradient_linear(d)
+            g = problem.gradient(d)
             grad_norm = float(np.linalg.norm(g))
 
             eta = self._eta(k)
