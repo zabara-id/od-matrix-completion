@@ -38,14 +38,12 @@ class KLProximalDescent(BaseOptimizer):
         eps: float = 1e-12,
         max_iters: int = 500,
         tol: float = 1e-6,
-        verbose: bool = False,
-        random_state: Optional[int] = None,
+        verbose: bool = False
     ) -> None:
         super().__init__(
             max_iters=max_iters,
             tol=tol,
             verbose=verbose,
-            random_state=random_state,
         )
         self.step_size = float(step_size)
         self.schedule = str(schedule).lower()
@@ -181,4 +179,3 @@ class KLProximalDescent(BaseOptimizer):
             converged=converged,
             history=history,
         )
-

@@ -38,13 +38,11 @@ class SubgradientDescent(BaseOptimizer):
         max_iters: int = 500,
         tol: float = 1e-6,
         verbose: bool = False,
-        random_state: Optional[int] = None,
     ) -> None:
         super().__init__(
             max_iters=max_iters,
             tol=tol,
             verbose=verbose,
-            random_state=random_state,
         )
         self.step_size = float(step_size)
         self.schedule = str(schedule).lower()
@@ -149,7 +147,7 @@ class SubgradientDescent(BaseOptimizer):
             if self.verbose and (k == 0 or (k + 1) % 50 == 0):
                 print(f"[SGD] it={k+1} obj={obj_new:.6e} |g|={grad_norm:.3e} step={rel_step:.3e} eta={eta:.3e}")
 
-            # Критерии остановки: малый шаг или малое изменение цели
+            # Критерии остановки: малый шаг или малое изменение 
             if rel_step <= self.tol or abs(obj_new - obj) <= self.tol * max(1.0, abs(obj)):
                 converged = True
                 D = D_new
@@ -157,7 +155,6 @@ class SubgradientDescent(BaseOptimizer):
                 obj = obj_new
                 break
 
-            # Переход к следующей итерации
             D = D_new
             d = d_new
             obj = obj_new

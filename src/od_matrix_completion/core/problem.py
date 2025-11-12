@@ -6,6 +6,7 @@ from typing import Optional
 import numpy as np
 from numpy.typing import NDArray
 
+from.dto import Dimensions
 from .base_algo import BaseOptimizer, OptimizationResult
 
 
@@ -17,11 +18,7 @@ def _safe_log_ratio(D: np.ndarray, D_hat: np.ndarray, eps: float = 1e-12) -> np.
     return np.log(Dc / Hc)
 
 
-@dataclass
-class Dimensions:
-    n_edges: int
-    n_zones: int
-    n_od_pairs: int
+
 
 
 class Problem:
@@ -39,12 +36,12 @@ class Problem:
     def __init__(
         self,
         *,
-        A: Optional[np.ndarray] = None,
+        A: Optional[NDArray[np.float64]] = None,
         f_obs: Optional[np.ndarray] = None,
-        sensor_weights: Optional[np.ndarray] = None,
-        D_hat: Optional[np.ndarray] = None,
-        L: Optional[np.ndarray] = None,
-        W: Optional[np.ndarray] = None,
+        sensor_weights: Optional[NDArray[np.float64]] = None,
+        D_hat: Optional[NDArray[np.float64]] = None,
+        L: Optional[NDArray[np.float64]] = None,
+        W: Optional[NDArray[np.float64]] = None,
         gamma: float = 0.0,
     ) -> None:
         self.A = None if A is None else np.asarray(A, dtype=float)
@@ -117,7 +114,6 @@ class Problem:
 
         return dims
 
-    # -------------------------- Векторизация -----------------------------
     def vec(self, D: np.ndarray) -> np.ndarray:
         D = np.asarray(D, dtype=float)
         if D.ndim != 2 or D.shape[0] != D.shape[1]:
@@ -170,7 +166,7 @@ class Problem:
         else:
             raise ValueError("x must be 1D (d) or 2D square (D)")
 
-        # Прижатие к наблюдаемым счётчикам
+        # Невязка по счетчикам
         if self.f_obs is not None:
             resid = self.linear_prediction(d) - self.f_obs
             if self.sensor_weights is not None:
@@ -178,7 +174,7 @@ class Problem:
             else:
                 val += 0.5 * float(resid @ resid)
 
-        # Регуляризация KL
+        # Регуляризация по KL
         if self.gamma > 0.0 and self.D_hat is not None:
             # KL(D||D_hat) = sum d_ij * log(d_ij / dh_ij) - d_ij + dh_ij
             eps = 1e-12
@@ -298,10 +294,7 @@ class Problem:
         algo = algorithm or self._algo
         if algo is None:
             raise RuntimeError("Не задан оптимизатор. Передайте его в solve(...) или вызовите set_algorithm(...)")
-        if not algo.supports(self):
-            raise RuntimeError(
-                f"Оптимизатор {algo.__class__.__name__} не поддерживает данную постановку"
-            )
+  
 
         return algo.fit(self, x0=x0, callback=callback)
 
