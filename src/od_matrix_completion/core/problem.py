@@ -5,7 +5,8 @@ from typing import Optional
 import numpy as np
 from numpy.typing import NDArray
 
-from.dto import Dimensions
+from .dto import Dimensions
+from .subfunctions import safe_log_ratio
 from .base_algo import BaseOptimizer, OptimizationResult
 from .models.linear_model import (
     linear_prediction as _linear_prediction,
@@ -17,20 +18,12 @@ from .models.beckmann_model import (
 )
 
 
-def _safe_log_ratio(D: np.ndarray, D_hat: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    """Безопасно вычислить log(D / D_hat) покомпонентно (для градиента KL)."""
-
-    Dc = np.maximum(D, eps)
-    Hc = np.maximum(D_hat, eps)
-    return np.log(Dc / Hc)
-
-
 class Problem:
-    """Задача восстановления OD-матрицы (линейная модель f ≈ A @ d).
+    """Задача восстановления матрицы корреспонденций.
 
     Что хранит и делает:
       - Данные: A, наблюдаемые счётчики f_obs, веса датчиков sensor_weights,
-        априорная матрица D_hat, маргиналии L (строки) и W (столбцы), γ.
+        априорная матрица D_hat, маргиналии L (строки) и W (столбцы), \gamma.
       - Проверяет согласованность размерностей.
       - Помогает с векторизацией d = vec(D) и обратно.
       - Считает целевую и градиент для линейного случая.
@@ -42,7 +35,7 @@ class Problem:
         model: str,
         *,
         A: Optional[NDArray[np.float64]] = None,
-        f_obs: Optional[np.ndarray] = None,
+        f_obs: Optional[NDArray[np.float64]] = None,
         sensor_weights: Optional[NDArray[np.float64]] = None,
         D_hat: Optional[NDArray[np.float64]] = None,
         L: Optional[NDArray[np.float64]] = None,
@@ -122,13 +115,13 @@ class Problem:
 
         return dims
 
-    def vec(self, D: np.ndarray) -> np.ndarray:
+    def vec(self, D: NDArray[np.float64]) -> NDArray[np.float64]:
         D = np.asarray(D, dtype=float)
         if D.ndim != 2 or D.shape[0] != D.shape[1]:
             raise ValueError("D must be a square 2D array")
         return D.reshape(-1)
 
-    def unvec(self, d: np.ndarray) -> np.ndarray:
+    def unvec(self, d: NDArray[np.float64]) -> NDArray[np.float64]:
         dims = self._infer_dimensions()
         d = np.asarray(d, dtype=float).reshape(-1)
         if d.size != dims.n_od_pairs:
@@ -137,7 +130,7 @@ class Problem:
             )
         return d.reshape(dims.n_zones, dims.n_zones)
 
-    def prediction(self, d: np.ndarray) -> np.ndarray:
+    def prediction(self, d: NDArray[np.float64]) -> NDArray[np.float64]:
         match self.model:
             case "linear":
                 return _linear_prediction(self.A, d)
@@ -146,7 +139,7 @@ class Problem:
             case _:
                 raise RuntimeError("Unsupported model selected")
     
-    def gradient(self, d: np.ndarray) -> np.ndarray:
+    def gradient(self, d: NDArray[np.float64]) -> NDArray[np.float64]:
         dims = self.validate()
         d = np.asarray(d, dtype=float).reshape(-1)
 
@@ -166,11 +159,11 @@ class Problem:
         # Добавить градиент регуляризации KL, если задана
         if self.gamma > 0.0 and self.D_hat is not None:
             D = d.reshape(dims.n_zones, dims.n_zones)
-            grad = grad + self.gamma * _safe_log_ratio(D, self.D_hat).reshape(-1)
+            grad = grad + self.gamma * safe_log_ratio(D, self.D_hat).reshape(-1)
 
         return grad
 
-    def weighted_residual(self, d: np.ndarray) -> np.ndarray:
+    def weighted_residual(self, d: NDArray[np.float64]) -> NDArray[np.float64]:
         if self.f_obs is None:
             raise ValueError("f_obs must be set to compute residuals")
         resid = self.prediction(d) - self.f_obs
@@ -178,7 +171,7 @@ class Problem:
             return resid
         return self.sensor_weights * resid
 
-    def objective(self, x: np.ndarray | np.matrix | None) -> float:
+    def objective(self, x: NDArray[np.float64] | np.matrix | None) -> float:
         """Целевая функция (линейный случай).
 
         0.5 * || W^{1/2} (A d - f_obs) ||^2 + gamma * KL(D || D_hat)
@@ -220,14 +213,13 @@ class Problem:
 
         return val
 
-    
 
-    def initial_guess(self) -> np.ndarray:
+    def initial_guess(self) -> NDArray[np.float64]:
         """
         Начальное приблиэение для матрицы корреспонденций
 
         Returns:
-            np.ndarray: _description_
+            NDArray[np.float64]: _description_
         """
 
         dims = self._infer_dimensions()
@@ -243,14 +235,14 @@ class Problem:
 
     @staticmethod
     def _ipf_to_marginals(
-        D0: np.ndarray,
-        L: np.ndarray,
-        W: np.ndarray,
+        D0: NDArray[np.float64],
+        L: NDArray[np.float64],
+        W: NDArray[np.float64],
         *,
         max_iters: int = 1000,
         tol: float = 1e-10,
         eps: float = 1e-15,
-    ) -> np.ndarray:
+    ) -> NDArray[np.float64]:
         """IPF-проекция на заданные маргиналии (строки/столбцы).
 
         Мультипликативно масштабирует строки/столбцы:
@@ -289,7 +281,7 @@ class Problem:
         self,
         *,
         algorithm: Optional[BaseOptimizer] = None,
-        x0: Optional[np.ndarray] = None,
+        x0: Optional[NDArray[np.float64]] = None,
         callback: Optional[callable] = None,
     ) -> OptimizationResult:
          # Ранняя проверка размерностей
