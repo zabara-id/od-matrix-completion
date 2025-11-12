@@ -8,6 +8,14 @@ from numpy.typing import NDArray
 
 from.dto import Dimensions
 from .base_algo import BaseOptimizer, OptimizationResult
+from .models.linear_model import (
+    linear_prediction as _linear_prediction,
+    gradient_linear as _gradient_linear,
+)
+from .models.beckmann_model import (
+    beckmann_prediction as _beckmann_prediction,
+    gradient_beckmann as _gradient_beckmann,
+)
 
 
 def _safe_log_ratio(D: np.ndarray, D_hat: np.ndarray, eps: float = 1e-12) -> np.ndarray:
@@ -16,9 +24,6 @@ def _safe_log_ratio(D: np.ndarray, D_hat: np.ndarray, eps: float = 1e-12) -> np.
     Dc = np.maximum(D, eps)
     Hc = np.maximum(D_hat, eps)
     return np.log(Dc / Hc)
-
-
-
 
 
 class Problem:
@@ -35,6 +40,7 @@ class Problem:
 
     def __init__(
         self,
+        model: str,
         *,
         A: Optional[NDArray[np.float64]] = None,
         f_obs: Optional[np.ndarray] = None,
@@ -53,6 +59,9 @@ class Problem:
         self.gamma = float(gamma)
 
         self._algo: Optional[BaseOptimizer] = None
+        self.model = str(model).lower()
+        if self.model not in {"linear", "beckmann"}:
+            raise ValueError("Unknown model. Supported: 'linear', 'beckmann'")
 
     def _infer_dimensions(self) -> Dimensions:
         if self.A is None:
@@ -131,9 +140,13 @@ class Problem:
 
     # --------------------- Линейная модель -------------------------------
     def linear_prediction(self, d: np.ndarray) -> np.ndarray:
-        if self.A is None:
-            raise ValueError("A must be set for linear prediction")
-        return self.A @ np.asarray(d, dtype=float).reshape(-1)
+        match self.model:
+            case "linear":
+                return _linear_prediction(self.A, d)
+            case "beckmann":
+                return _beckmann_prediction(d)
+            case _:
+                raise RuntimeError("Unsupported model selected")
 
     def weighted_residual(self, d: np.ndarray) -> np.ndarray:
         if self.f_obs is None:
@@ -193,21 +206,21 @@ class Problem:
         """
 
         dims = self.validate()
-        d = np.asarray(d, dtype=float).reshape(-1)
-
-        # Первое слагаемое: A^T W (A d - f)
-        resid = self.linear_prediction(d) - (self.f_obs if self.f_obs is not None else 0.0)
-        if self.sensor_weights is not None:
-            grad = self.A.T @ (self.sensor_weights * resid)
-        else:
-            grad = self.A.T @ resid
-
-        # Добавка от KL, если включена
-        if self.gamma > 0.0 and self.D_hat is not None:
-            D = d.reshape(dims.n_zones, dims.n_zones)
-            grad += self.gamma * _safe_log_ratio(D, self.D_hat).reshape(-1)
-
-        return grad
+        match self.model:
+            case "linear":
+                return _gradient_linear(
+                    d,
+                    A=self.A,
+                    f_obs=self.f_obs,
+                    sensor_weights=self.sensor_weights,
+                    gamma=self.gamma,
+                    D_hat=self.D_hat,
+                    n_zones=dims.n_zones,
+                )
+            case "beckmann":
+                return _gradient_beckmann(d)
+            case _:
+                raise RuntimeError("Unsupported model selected")
 
     # ------------------------ Инициализация D ----------------------------
     def initial_guess(self) -> np.ndarray:
@@ -273,7 +286,6 @@ class Problem:
 
         return D
 
-    # ------------------------------ Запуск --------------------------------
     def solve(
         self,
         *,
