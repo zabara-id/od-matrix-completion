@@ -24,6 +24,7 @@ dependencies = [
     "jupyter>=1.1.1",
     "matplotlib>=3.10.7",
     "networkx>=3.6.1",
+    "numba>=0.63.1",
     "numpy>=2.3.4",
     "pandas>=2.3.3",
     "scipy>=1.16.3",
