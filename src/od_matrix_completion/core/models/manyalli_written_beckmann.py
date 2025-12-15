@@ -137,6 +137,7 @@ def aon_assign(csr: CSRGraph, weight: np.ndarray, D: np.ndarray) -> Tuple[np.nda
     """
     weight = np.asarray(weight, dtype=np.float64)
     D = np.asarray(D, dtype=np.float64)
+    gradient = np.zeros(shape=(csr.m, csr.n * csr.n))
 
     if D.shape != (csr.n, csr.n):
         raise ValueError(f"D must have shape ({csr.n},{csr.n}), got {D.shape}")
@@ -170,9 +171,11 @@ def aon_assign(csr: CSRGraph, weight: np.ndarray, D: np.ndarray) -> Tuple[np.nda
                 if e < 0:
                     break
                 solution[e] += correspodence
+                # Предполагаемый счет градиента
+                gradient[e, origin * csr.n + destanation] = 1
                 cur = int(csr.tail[e])
 
-    return solution, total_assignment_cost
+    return solution, total_assignment_cost, gradient
 
 
 # ============================================================
@@ -195,28 +198,29 @@ def fw_beckmann(
 
     """
     flow = np.zeros(csr.m, dtype=np.float64)
+    gradient = np.zeros(shape=(csr.m, csr.n * csr.n))
 
     for k in range(1, max_iter + 1):
         # Решаем ЛП на заданном множестве
         edge_cost_field = edge_cost(flow)
-        y, total_cost_k = aon_assign(csr, edge_cost_field, D)
+        y, total_cost_k, gradient_k = aon_assign(csr, edge_cost_field, D)
 
         # Шаг аглоритма Франка-Вульфа
         gamma = 2.0 / (k + 2.0)
         flow = (1.0 - gamma) * flow + gamma * y
+        gradient = (1.0 - gamma) * gradient + gamma * gradient_k
 
         new_edge_cost_field = edge_cost(flow)
         rg = stop_criterion(flow, new_edge_cost_field, total_cost_k)
 
-        # Это просто забавные леишние штуки
+        # Это просто забавные лишние штуки
         if verbose and (k == 1 or k % 10 == 0 or rg <= rgap_target):
-            print(f"iter={k:4d}  gamma={gamma:.6f}  rgap={rg:.3e}")
+            print(f"iter={k:4d}  gamma={gamma:.6f}  rgap={rg:.3e} grad_norm={np.linalg.norm(gradient):.6f}")
 
         if rg <= rgap_target:
             break
 
-    return flow, edge_cost(flow)
-
+    return flow, gradient
 
 # ============================================================
 # Example
@@ -257,3 +261,4 @@ if __name__ == "__main__":
     print("\nFinal link flows / times:")
     for e in range(csr.m):
         print(f"{tail[e]}->{head[e]}  flow={flow[e]:.3f}  time={time[e]:.3f}")
+
