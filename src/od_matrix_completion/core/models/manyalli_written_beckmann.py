@@ -248,6 +248,34 @@ if _NUMBA_AVAILABLE:
         return solution, total_assignment_cost, gradient
 
 
+    @numba.njit(cache=True)
+    def _aon_assign_numba_flow_core(n, m, first_out, out_eid, tail, head, weight, D):
+        solution = np.zeros(m, dtype=np.float64)
+        total_assignment_cost = 0.0
+
+        dist = np.empty(n, dtype=np.float64)
+        pe = np.empty(n, dtype=np.int64)
+        heap_nodes = np.empty(m, dtype=np.int64)
+        heap_costs = np.empty(m, dtype=np.float64)
+
+        for origin in range(n):
+            dist, pe = _dijkstra_numba(n, first_out, out_eid, head, weight, origin, dist, pe, heap_nodes, heap_costs)
+
+            corresp_to_assign = D[origin, :]
+            total_assignment_cost += float(np.dot(corresp_to_assign, dist))
+
+            for destination in range(n):
+                cur = destination
+                while cur != origin:
+                    e = pe[cur]
+                    if e < 0:
+                        break
+                    solution[e] += corresp_to_assign[destination]
+                    cur = tail[e]
+
+        return solution, total_assignment_cost
+
+
 # ============================================================
 # All-or-Nothing assignment (FW direction)
 # ============================================================
@@ -273,6 +301,24 @@ def aon_assign(csr: CSRGraph, weight: np.ndarray, D: np.ndarray, use_numba: bool
         return _aon_assign_numba(csr, weight, D)
 
     return _aon_assign_py(csr, weight, D)
+
+
+def aon_assign_flow(csr: CSRGraph, weight: np.ndarray, D: np.ndarray, use_numba: bool = True) -> Tuple[np.ndarray, float]:
+    """
+    All-or-Nothing loading when ALL nodes are zones.
+
+    Вариант без построения полного градиента (для быстрой forward-оценки потоков).
+    """
+    weight = np.asarray(weight, dtype=np.float64)
+    D = np.asarray(D, dtype=np.float64)
+
+    if D.shape != (csr.n, csr.n):
+        raise ValueError(f"D must have shape ({csr.n},{csr.n}), got {D.shape}")
+
+    if use_numba and _NUMBA_AVAILABLE:
+        return _aon_assign_numba_flow(csr, weight, D)
+
+    return _aon_assign_py_flow(csr, weight, D)
 
 
 def _aon_assign_py(csr: CSRGraph, weight: np.ndarray, D: np.ndarray) -> Tuple[np.ndarray, float]:
@@ -319,6 +365,33 @@ def _aon_assign_py(csr: CSRGraph, weight: np.ndarray, D: np.ndarray) -> Tuple[np
     return solution, total_assignment_cost, gradient
 
 
+def _aon_assign_py_flow(csr: CSRGraph, weight: np.ndarray, D: np.ndarray) -> Tuple[np.ndarray, float]:
+    """
+    Pure NumPy implementation (fallback when numba is unavailable).
+    """
+    weight = np.asarray(weight, dtype=np.float64)
+    D = np.asarray(D, dtype=np.float64)
+
+    solution = np.zeros(csr.m, dtype=np.float64)
+    total_assignment_cost = 0.0
+
+    for origin in range(csr.n):
+        dist, previous_edges = csr.dijkstra(weight, origin)
+        corresp_to_assign = D[origin, :]
+        total_assignment_cost += float(np.dot(corresp_to_assign, dist))
+
+        for destination, correspodence in enumerate(corresp_to_assign):
+            cur = int(destination)
+            while cur != origin:
+                e = int(previous_edges[cur])
+                if e < 0:
+                    break
+                solution[e] += correspodence
+                cur = int(csr.tail[e])
+
+    return solution, total_assignment_cost
+
+
 def _aon_assign_numba(csr: CSRGraph, weight: np.ndarray, D: np.ndarray) -> Tuple[np.ndarray, float]:
     """
     numba-accelerated All-or-Nothing loading.
@@ -333,6 +406,27 @@ def _aon_assign_numba(csr: CSRGraph, weight: np.ndarray, D: np.ndarray) -> Tuple
     out_eid = np.asarray(csr.out_eid, dtype=np.int64)
 
     return _aon_assign_numba_core(
+        int(csr.n),
+        int(csr.m),
+        first_out,
+        out_eid,
+        tail,
+        head,
+        np.asarray(weight, dtype=np.float64),
+        np.asarray(D, dtype=np.float64),
+    )
+
+
+def _aon_assign_numba_flow(csr: CSRGraph, weight: np.ndarray, D: np.ndarray) -> Tuple[np.ndarray, float]:
+    """
+    numba-accelerated All-or-Nothing loading (flow-only).
+    """
+    tail = np.asarray(csr.tail, dtype=np.int64)
+    head = np.asarray(csr.head, dtype=np.int64)
+    first_out = np.asarray(csr.first_out, dtype=np.int64)
+    out_eid = np.asarray(csr.out_eid, dtype=np.int64)
+
+    return _aon_assign_numba_flow_core(
         int(csr.n),
         int(csr.m),
         first_out,
@@ -390,6 +484,38 @@ def fw_beckmann(
 
     return flow, gradient
 
+
+def fw_beckmann_flow(
+    csr: CSRGraph,
+    edge_cost,
+    D: np.ndarray,
+    max_iter=500,
+    rgap_target=1e-4,
+    verbose=True,
+    use_numba=True,
+) -> np.ndarray:
+    """
+    Метод Франка-Вульфа для TA по модели Бэкманна (только потоки, без градиента).
+    """
+    flow = np.zeros(csr.m, dtype=np.float64)
+
+    for k in range(1, max_iter + 1):
+        edge_cost_field = edge_cost(flow)
+        y, total_cost_k = aon_assign_flow(csr, edge_cost_field, D, use_numba=use_numba)
+
+        gamma = 2.0 / (k + 2.0)
+        flow = (1.0 - gamma) * flow + gamma * y
+
+        new_edge_cost_field = edge_cost(flow)
+        rg = stop_criterion(flow, new_edge_cost_field, total_cost_k)
+
+        if verbose and (k == 1 or k % 10 == 0 or rg <= rgap_target):
+            print(f"iter={k:4d}  gamma={gamma:.6f}  rgap={rg:.3e}")
+
+        if rg <= rgap_target:
+            break
+
+    return flow
 # ============================================================
 # Example
 # 

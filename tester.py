@@ -1,19 +1,37 @@
 import csv
+import os
 from pathlib import Path
 from typing import Optional, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 from src.od_matrix_completion.core.models.manyalli_written_beckmann import (
     BRP,
     CSRGraph,
     fw_beckmann,
+    fw_beckmann_flow,
 )
 from src.od_matrix_completion.core.models.soft_beckmann import fw_beckmann_soft
 
 # Путь к матрице корреспонденций
 OD_PATH = Path("data/processed/Mat_Car_ev.csv")
+
+# Matplotlib config/cache dir: keep it in-repo to avoid permission issues on macOS.
+os.environ.setdefault("MPLCONFIGDIR", str(Path(".mplconfig").resolve()))
+Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
+
+
+def _get_plt():
+    import sys
+
+    import matplotlib
+
+    if "matplotlib.pyplot" not in sys.modules:
+        matplotlib.use("Agg")
+
+    import matplotlib.pyplot as plt
+
+    return plt
 
 
 def load_od_matrix(path: Path = OD_PATH) -> np.ndarray:
@@ -287,6 +305,7 @@ class LSProblem:
 def save_objective_curve(obj_history, plot_path: Optional[Path], title: str) -> None:
     if plot_path is None:
         return
+    plt = _get_plt()
     plot_path = Path(plot_path)
     plot_path.parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(6, 4))
@@ -299,6 +318,105 @@ def save_objective_curve(obj_history, plot_path: Optional[Path], title: str) -> 
     plt.savefig(plot_path, dpi=150)
     plt.close()
 
+
+def save_frobenius_curve(frob_history, plot_path: Optional[Path], title: str) -> None:
+    if plot_path is None:
+        return
+    plt = _get_plt()
+    plot_path = Path(plot_path)
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.figure(figsize=(6, 4))
+    plt.semilogy(frob_history, marker="o", ms=3)
+    plt.xlabel("iteration")
+    plt.ylabel("||D_k - D_ref||_1 / ||D_ref||_1")
+    plt.title(title)
+    plt.grid(True, which="both", ls="--", alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(plot_path, dpi=150)
+    plt.close()
+
+
+def save_comparison_curves(
+    series: dict,
+    plot_path: Optional[Path],
+    title: str,
+    ylabel: str,
+    *,
+    semilogy: bool = True,
+) -> None:
+    if plot_path is None:
+        return
+    plt = _get_plt()
+    plot_path = Path(plot_path)
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plt.figure(figsize=(7, 4))
+    for label, values in series.items():
+        if values is None:
+            continue
+        y = np.asarray(values, dtype=np.float64)
+        x = np.arange(y.size)
+        if semilogy:
+            plt.semilogy(x, y, marker="o", ms=3, label=str(label))
+        else:
+            plt.plot(x, y, marker="o", ms=3, label=str(label))
+
+    plt.xlabel("iteration")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True, which="both", ls="--", alpha=0.6)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(plot_path, dpi=150)
+    plt.close()
+
+
+def kl_value_masked(D: np.ndarray, D_prior: np.ndarray, allowed: np.ndarray, eps: float = 1e-12) -> float:
+    Dp = np.maximum(D, eps)
+    Pp = np.maximum(D_prior, eps)
+    log_ratio = np.log(Dp) - np.log(Pp)
+    kl_mat = Dp * log_ratio - Dp + Pp
+    return float(np.sum(allowed * kl_mat))
+
+
+def od_error_metrics(D_est: np.ndarray, D_ref: np.ndarray, allowed: np.ndarray) -> dict:
+    diff = (np.asarray(D_est, dtype=np.float64) - np.asarray(D_ref, dtype=np.float64)) * allowed
+    ref = np.asarray(D_ref, dtype=np.float64) * allowed
+    l1 = float(np.sum(np.abs(diff)))
+    ref_l1 = float(np.sum(np.abs(ref)))
+    off = allowed > 0.0
+    mae = float(np.mean(np.abs(diff[off])))
+    rmse = float(np.sqrt(np.mean(diff[off] ** 2)))
+    return {
+        "l1": l1,
+        "rel_l1": l1 / max(ref_l1, 1e-12),
+        "mae": mae,
+        "rmse": rmse,
+    }
+
+
+def hard_objective_value(
+    csr: CSRGraph,
+    edge_cost: BRP,
+    D: np.ndarray,
+    f_hat: np.ndarray,
+    fw_eval_params: dict,
+    *,
+    mask: Optional[np.ndarray] = None,
+    reg_lambda: float = 0.0,
+    D_prior: Optional[np.ndarray] = None,
+    allowed: Optional[np.ndarray] = None,
+) -> float:
+    flow = fw_beckmann_flow(csr, edge_cost, D, **fw_eval_params)
+    residual = flow - np.asarray(f_hat, dtype=np.float64)
+    if mask is not None:
+        residual = residual * np.asarray(mask, dtype=np.float64)
+    value = 0.5 * float(np.dot(residual, residual))
+    if reg_lambda > 0.0:
+        if D_prior is None or allowed is None:
+            raise ValueError("D_prior and allowed are required when reg_lambda>0")
+        value += float(reg_lambda) * kl_value_masked(D, D_prior, allowed)
+    return value
 
 
 def project_to_marginals(D: np.ndarray, L: np.ndarray, W: np.ndarray, n_iters: int = 2) -> np.ndarray:
@@ -360,10 +478,13 @@ def run_mirror_descent(
     mask: Optional[np.ndarray] = None,
     n_iters: int = 30,
     plot_path: Optional[Path] = None,
+    fro_plot_path: Optional[Path] = None,
     # regularization (handled inside LSProblem)
     reg_kind: str = "none",          # "none" | "kl"
     reg_lambda: float = 0.0,
     D_prior: Optional[np.ndarray] = None,
+    D_init: Optional[np.ndarray] = None,
+    n_fd_checks: int = 5,
 ) -> dict:
     """
     Mirror descent по OD-матрице с masked-IPF проекцией (структурный ноль на диагонали сохраняется).
@@ -379,6 +500,7 @@ def run_mirror_descent(
     # allowed mask: запрещаем диагональ (OD ii = 0)
     allowed = np.ones((n, n), dtype=np.float64)
     np.fill_diagonal(allowed, 0.0)
+    ref_l1 = float(np.sum(np.abs(D_reference * allowed)))
 
     # prior по умолчанию для KL: IPF-матрица с теми же маргиналиями и структурным нулём на диагонали
     if reg_kind == "kl" and reg_lambda > 0.0 and D_prior is None:
@@ -399,11 +521,19 @@ def run_mirror_descent(
         enforce_zero_diag_in_reg=True,
     )
 
-    # Старт: IPF-аппроксимация с structural zeros
-    D_est = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
-    D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=80)
+    # Старт
+    if D_init is not None:
+        D_est = np.asarray(D_init, dtype=np.float64).copy()
+        if D_est.shape != (n, n):
+            raise ValueError(f"D_init must have shape ({n},{n}), got {D_est.shape}")
+        D_est = np.maximum(D_est, 0.0) * allowed
+    else:
+        D_est = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
+        D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=80)
 
     obj_history = []
+    diff_l1_0 = float(np.sum(np.abs((D_est - D_reference) * allowed)))
+    frob_history = [diff_l1_0 / max(ref_l1, 1e-12)]
 
     # Mirror Descent params
     step0 = 1e-2
@@ -419,6 +549,9 @@ def run_mirror_descent(
 
     for k in range(n_iters):
         obj, subgrad_D = problem.evaluate(D_est)
+        if k == 0:
+            obj_history.append(obj)
+            best_obj = min(best_obj, obj)
         grad_norm = float(np.linalg.norm(subgrad_D))
 
         step = step0
@@ -453,6 +586,8 @@ def run_mirror_descent(
         D_est = best_iter_D
         best_obj = min(best_obj, best_iter_obj)
         obj_history.append(best_iter_obj)
+        diff_l1 = float(np.sum(np.abs((D_est - D_reference) * allowed)))
+        frob_history.append(diff_l1 / max(ref_l1, 1e-12))
 
         if accepted and trials_used <= 2:
             step0 = min(step0 * 1.3, 1e-1)
@@ -475,22 +610,406 @@ def run_mirror_descent(
         "flow_final": flow_final,
         "times_final": times_final,
         "obj_history": obj_history,
+        "frob_history": frob_history,
         "obj_ref": obj_ref,
         "obj_est": obj_est,
     }
 
-    D_test = results["D_est"]
-    # выбери пару крупных off-diagonal элементов
-    idx = np.argwhere(~np.eye(D_test.shape[0], dtype=bool))
-    vals = np.array([D_test[i,j] for i,j in idx])
-    top = idx[np.argsort(-vals)[:5]]
+    if n_fd_checks > 0:
+        D_test = results["D_est"]
+        idx = np.argwhere(~np.eye(D_test.shape[0], dtype=bool))
+        vals = np.array([D_test[i, j] for i, j in idx])
+        top = idx[np.argsort(-vals)[: min(int(n_fd_checks), idx.shape[0])]]
 
-    for i, j in top:
-        fd_check_one(problem, D_test, int(i), int(j), rel_step=1e-6)
+        for i, j in top:
+            fd_check_one(problem, D_test, int(i), int(j), rel_step=1e-6)
 
     save_objective_curve(obj_history, plot_path, "Mirror descent objective")
+    save_frobenius_curve(frob_history, fro_plot_path, "Relative L1 error to reference")
 
     return results
+
+
+def run_mirror_descent_soft(
+    csr: CSRGraph,
+    edge_cost: BRP,
+    D_reference: np.ndarray,
+    f_hat: np.ndarray,
+    *,
+    mask: Optional[np.ndarray] = None,
+    theta: float = 10.0,
+    reg_lambda: float = 0.0,
+    D_prior: Optional[np.ndarray] = None,
+    D_init: Optional[np.ndarray] = None,
+    n_iters_outer: int = 30,
+    max_iter_fw_soft: int = 30,
+    fw_eval_params_hard: Optional[dict] = None,
+    eval_hard_every: int = 1,
+) -> dict:
+    """
+    Mirror descent по OD, но градиент берём из soft Beckmann (fw_beckmann_soft).
+
+    Если задан fw_eval_params_hard, то дополнительно считаем "честную" метрику:
+      hard_obj(D) = 0.5||M(f_hard(D)-f_hat)||^2 + λ KL(D||D_prior)
+    """
+    D_reference = np.asarray(D_reference, dtype=np.float64)
+    n = D_reference.shape[0]
+
+    L_ref = D_reference.sum(axis=1)
+    W_ref = D_reference.sum(axis=0)
+
+    allowed = np.ones((n, n), dtype=np.float64)
+    np.fill_diagonal(allowed, 0.0)
+    ref_l1 = float(np.sum(np.abs(D_reference * allowed)))
+
+    if reg_lambda > 0.0 and D_prior is None:
+        D_prior = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
+        D_prior = project_to_marginals_masked(D_prior, L_ref, W_ref, allowed, n_iters=80)
+
+    if reg_lambda > 0.0 and D_prior is None:
+        raise ValueError("D_prior is required when reg_lambda>0")
+
+    if D_init is not None:
+        D_est = np.asarray(D_init, dtype=np.float64).copy()
+        if D_est.shape != (n, n):
+            raise ValueError(f"D_init must have shape ({n},{n}), got {D_est.shape}")
+        D_est = np.maximum(D_est, 0.0) * allowed
+    elif D_prior is None:
+        D_est = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
+        D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=80)
+    else:
+        D_est = np.asarray(D_prior, dtype=np.float64).copy()
+
+    def kl_value_and_grad(D: np.ndarray, eps: float = 1e-12) -> Tuple[float, np.ndarray]:
+        if reg_lambda <= 0.0:
+            return 0.0, np.zeros_like(D, dtype=np.float64)
+        Dp = np.maximum(D, eps)
+        Pp = np.maximum(D_prior, eps)
+        log_ratio = np.log(Dp) - np.log(Pp)
+        kl_mat = Dp * log_ratio - Dp + Pp
+        kl_val = float(np.sum(allowed * kl_mat))
+        kl_grad = allowed * log_ratio
+        np.fill_diagonal(kl_grad, 0.0)
+        return kl_val, kl_grad
+
+    # mirror descent outer
+    step0 = 1e-2
+    ls_beta = 0.5
+    ls_min = 1e-12
+    ls_max_trials = 50
+    improve_eps = 1e-12
+    eps_floor = 1e-12
+    exp_clip = 50.0
+
+    obj_soft_history = []
+    obj_hard_history = []
+    diff_l1_0 = float(np.sum(np.abs((D_est - D_reference) * allowed)))
+    frob_history = [diff_l1_0 / max(ref_l1, 1e-12)]
+
+    for it in range(n_iters_outer):
+        flow, JT = fw_beckmann_soft(
+            csr, edge_cost, D_est,
+            max_iter=max_iter_fw_soft,
+            theta=theta,
+            delta_rel=0.02,
+            delta_abs=1e-3,
+            verbose=False,
+        )
+
+        residual = flow - np.asarray(f_hat, dtype=np.float64)
+        if mask is not None:
+            residual = residual * np.asarray(mask, dtype=np.float64)
+        data = 0.5 * float(np.dot(residual, residual))
+
+        kl_val, kl_grad = kl_value_and_grad(D_est)
+        obj = data + reg_lambda * kl_val
+
+        grad_data = JT(residual)
+        grad = grad_data + reg_lambda * kl_grad
+        grad_norm = float(np.linalg.norm(grad))
+
+        if it == 0:
+            obj_soft_history.append(obj)
+            hard_obj0 = float("nan")
+            if fw_eval_params_hard is not None and eval_hard_every > 0:
+                hard_obj0 = hard_objective_value(
+                    csr,
+                    edge_cost,
+                    D_est,
+                    f_hat,
+                    fw_eval_params_hard,
+                    mask=mask,
+                    reg_lambda=reg_lambda,
+                    D_prior=D_prior,
+                    allowed=allowed,
+                )
+            obj_hard_history.append(hard_obj0)
+
+        step = step0
+        accepted = False
+        best_obj = obj
+        best_D = D_est
+        step_used = step
+        trials_used = 0
+
+        for t in range(ls_max_trials):
+            trials_used = t + 1
+            base = np.maximum(D_est, eps_floor) * allowed
+            expo = np.clip(-step * grad, -exp_clip, exp_clip)
+            cand = base * np.exp(expo)
+
+            cand = project_to_marginals_masked(cand, L_ref, W_ref, allowed, n_iters=50)
+
+            flow_c, _ = fw_beckmann_soft(
+                csr, edge_cost, cand,
+                max_iter=max_iter_fw_soft,
+                theta=theta,
+                delta_rel=0.02,
+                delta_abs=1e-3,
+                verbose=False,
+            )
+
+            res_c = flow_c - np.asarray(f_hat, dtype=np.float64)
+            if mask is not None:
+                res_c = res_c * np.asarray(mask, dtype=np.float64)
+            data_c = 0.5 * float(np.dot(res_c, res_c))
+            kl_c, _ = kl_value_and_grad(cand)
+            obj_c = data_c + reg_lambda * kl_c
+
+            if obj_c < best_obj - improve_eps:
+                best_obj = obj_c
+                best_D = cand
+                accepted = True
+                step_used = step
+                break
+
+            step *= ls_beta
+            if step < ls_min:
+                break
+
+        D_est = best_D
+        if accepted and trials_used <= 2:
+            step0 = min(step0 * 1.3, 1e-1)
+        elif not accepted:
+            step0 *= 0.5
+
+        obj_soft_history.append(best_obj)
+        diff_l1 = float(np.sum(np.abs((D_est - D_reference) * allowed)))
+        frob_history.append(diff_l1 / max(ref_l1, 1e-12))
+
+        hard_obj = float("nan")
+        if fw_eval_params_hard is not None and eval_hard_every > 0:
+            if (it % int(eval_hard_every) == 0) or (it == n_iters_outer - 1):
+                hard_obj = hard_objective_value(
+                    csr,
+                    edge_cost,
+                    D_est,
+                    f_hat,
+                    fw_eval_params_hard,
+                    mask=mask,
+                    reg_lambda=reg_lambda,
+                    D_prior=D_prior,
+                    allowed=allowed,
+                )
+        obj_hard_history.append(hard_obj)
+
+        msg = (
+            f"outer={it:03d} soft_obj={obj:.6e} best_soft={best_obj:.6e} "
+            f"data={data:.3e} kl={kl_val:.3e} grad_norm={grad_norm:.3e} "
+            f"step={step_used:.2e} accepted={accepted} trials={trials_used}"
+        )
+        if np.isfinite(hard_obj):
+            msg += f" hard_obj={hard_obj:.6e}"
+        print(msg)
+
+    flow_final_soft, _ = fw_beckmann_soft(
+        csr, edge_cost, D_est,
+        max_iter=max_iter_fw_soft,
+        theta=theta,
+        delta_rel=0.02,
+        delta_abs=1e-3,
+        verbose=False,
+    )
+
+    results = {
+        "D_est": D_est,
+        "flow_final_soft": flow_final_soft,
+        "obj_soft_history": obj_soft_history,
+        "obj_hard_history": obj_hard_history,
+        "frob_history": frob_history,
+    }
+    return results
+
+
+def run_mirror_descent_hybrid(
+    csr: CSRGraph,
+    edge_cost: BRP,
+    D_reference: np.ndarray,
+    f_hat: np.ndarray,
+    fw_eval_params_hard: dict,
+    *,
+    mask: Optional[np.ndarray] = None,
+    theta: float = 10.0,
+    reg_lambda: float = 0.0,
+    D_prior: Optional[np.ndarray] = None,
+    D_init: Optional[np.ndarray] = None,
+    n_iters_outer: int = 30,
+    max_iter_fw_soft: int = 30,
+) -> dict:
+    """
+    Гибрид:
+      - целевая функция/acceptance: hard Beckmann objective (data+KL)
+      - направление (градиент data-части): soft JT(D) * residual_hard
+
+    Идея: мягкий surrogate даёт более стабильное направление, но шаг принимаем только если
+    реальная (hard) метрика улучшилась.
+    """
+    D_reference = np.asarray(D_reference, dtype=np.float64)
+    n = D_reference.shape[0]
+
+    L_ref = D_reference.sum(axis=1)
+    W_ref = D_reference.sum(axis=0)
+
+    allowed = np.ones((n, n), dtype=np.float64)
+    np.fill_diagonal(allowed, 0.0)
+    ref_l1 = float(np.sum(np.abs(D_reference * allowed)))
+
+    if reg_lambda > 0.0 and D_prior is None:
+        D_prior = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
+        D_prior = project_to_marginals_masked(D_prior, L_ref, W_ref, allowed, n_iters=80)
+
+    if reg_lambda > 0.0 and D_prior is None:
+        raise ValueError("D_prior is required when reg_lambda>0")
+
+    if D_init is not None:
+        D_est = np.asarray(D_init, dtype=np.float64).copy()
+        if D_est.shape != (n, n):
+            raise ValueError(f"D_init must have shape ({n},{n}), got {D_est.shape}")
+        D_est = np.maximum(D_est, 0.0) * allowed
+    elif D_prior is None:
+        D_est = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
+        D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=80)
+    else:
+        D_est = np.asarray(D_prior, dtype=np.float64).copy()
+
+    def kl_value_and_grad(D: np.ndarray, eps: float = 1e-12) -> Tuple[float, np.ndarray]:
+        if reg_lambda <= 0.0:
+            return 0.0, np.zeros_like(D, dtype=np.float64)
+        Dp = np.maximum(D, eps)
+        Pp = np.maximum(D_prior, eps)
+        log_ratio = np.log(Dp) - np.log(Pp)
+        kl_mat = Dp * log_ratio - Dp + Pp
+        kl_val = float(np.sum(allowed * kl_mat))
+        kl_grad = allowed * log_ratio
+        np.fill_diagonal(kl_grad, 0.0)
+        return kl_val, kl_grad
+
+    # mirror descent params
+    step0 = 1e-2
+    ls_beta = 0.5
+    ls_min = 1e-12
+    ls_max_trials = 20
+    improve_eps = 1e-12
+    eps_floor = 1e-12
+    exp_clip = 50.0
+
+    # initial hard evaluation
+    flow_hard = fw_beckmann_flow(csr, edge_cost, D_est, **fw_eval_params_hard)
+    residual_hard = flow_hard - np.asarray(f_hat, dtype=np.float64)
+    if mask is not None:
+        residual_hard = residual_hard * np.asarray(mask, dtype=np.float64)
+    data_hard = 0.5 * float(np.dot(residual_hard, residual_hard))
+    kl_val, kl_grad = kl_value_and_grad(D_est)
+    obj_hard = data_hard + reg_lambda * kl_val
+
+    obj_hard_history = [obj_hard]
+    diff_l1_0 = float(np.sum(np.abs((D_est - D_reference) * allowed)))
+    frob_history = [diff_l1_0 / max(ref_l1, 1e-12)]
+
+    for it in range(n_iters_outer):
+        # surrogate JT at current D
+        _, JT = fw_beckmann_soft(
+            csr,
+            edge_cost,
+            D_est,
+            max_iter=max_iter_fw_soft,
+            theta=theta,
+            delta_rel=0.02,
+            delta_abs=1e-3,
+            verbose=False,
+        )
+
+        grad_data = JT(residual_hard)
+        grad = grad_data + reg_lambda * kl_grad
+        grad_norm = float(np.linalg.norm(grad))
+
+        step = step0
+        accepted = False
+        best_obj = obj_hard
+        best_D = D_est
+        best_flow = flow_hard
+        best_residual = residual_hard
+        best_kl_grad = kl_grad
+        step_used = step
+        trials_used = 0
+
+        for t in range(ls_max_trials):
+            trials_used = t + 1
+            base = np.maximum(D_est, eps_floor) * allowed
+            expo = np.clip(-step * grad, -exp_clip, exp_clip)
+            cand = base * np.exp(expo)
+            cand = project_to_marginals_masked(cand, L_ref, W_ref, allowed, n_iters=50)
+
+            flow_c = fw_beckmann_flow(csr, edge_cost, cand, **fw_eval_params_hard)
+            res_c = flow_c - np.asarray(f_hat, dtype=np.float64)
+            if mask is not None:
+                res_c = res_c * np.asarray(mask, dtype=np.float64)
+            data_c = 0.5 * float(np.dot(res_c, res_c))
+            kl_c, kl_grad_c = kl_value_and_grad(cand)
+            obj_c = data_c + reg_lambda * kl_c
+
+            if obj_c < best_obj - improve_eps:
+                best_obj = obj_c
+                best_D = cand
+                best_flow = flow_c
+                best_residual = res_c
+                best_kl_grad = kl_grad_c
+                accepted = True
+                step_used = step
+                break
+
+            step *= ls_beta
+            if step < ls_min:
+                break
+
+        D_est = best_D
+        flow_hard = best_flow
+        residual_hard = best_residual
+        kl_grad = best_kl_grad
+        obj_hard = best_obj
+
+        if accepted and trials_used <= 2:
+            step0 = min(step0 * 1.3, 1e-1)
+        elif not accepted:
+            step0 *= 0.5
+
+        obj_hard_history.append(obj_hard)
+        diff_l1 = float(np.sum(np.abs((D_est - D_reference) * allowed)))
+        frob_history.append(diff_l1 / max(ref_l1, 1e-12))
+
+        print(
+            f"hybrid={it:03d} hard_obj={obj_hard:.6e} grad_norm={grad_norm:.3e} "
+            f"step={step_used:.2e} accepted={accepted} trials={trials_used}"
+        )
+
+    times_final = edge_cost(flow_hard)
+    return {
+        "D_est": D_est,
+        "flow_final_hard": flow_hard,
+        "times_final": times_final,
+        "obj_hard_history": obj_hard_history,
+        "frob_history": frob_history,
+    }
 
 
 def run_levenberg_marquardt(
@@ -676,9 +1195,113 @@ def fd_check_one(problem: LSProblem, D: np.ndarray, i: int, j: int, rel_step: fl
     print(f"FD check at ({i},{j}): grad={G[i,j]:.6e}, fd={fd:.6e}, ratio={G[i,j]/(fd+1e-18):.3e}")
 
 
-# ============================================================
-# main4: experiment (soft FW + KL + mirror descent)
-# ============================================================
+def main1():
+    """
+    Проверка восстановления OD-матрицы при наличии шума в потоках.
+    """
+    D_reference = load_od_matrix(OD_PATH)
+
+    csr, edge_cost = build_dense_graph(D_reference.shape[0])
+    fw_eval_params = {"max_iter": 30, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
+    flow_ref, _ = fw_beckmann(csr, edge_cost, D_reference, **fw_eval_params)
+
+    rng = np.random.default_rng(42)
+    noise = 0.05 * np.maximum(np.abs(flow_ref), 1.0) * rng.standard_normal(flow_ref.shape)
+    f_hat = flow_ref + noise
+
+    results = run_mirror_descent(
+        csr,
+        edge_cost,
+        D_reference,
+        f_hat,
+        fw_eval_params,
+        plot_path=Path("objective_curve_main1.png"),
+    )
+
+    print_solution("Сценарий main1: шумленные потоки", csr, results["flow_final"], results["times_final"], results["obj_ref"], results["obj_est"])
+
+
+def main2():
+    """
+    Частично наблюдаемые потоки: оптимизируем по маске.
+    Добавляем KL-регуляризацию к prior.
+    """
+    D_reference = load_od_matrix(OD_PATH)
+
+    csr, edge_cost = build_dense_graph(D_reference.shape[0])
+    fw_eval_params = {"max_iter": 30, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
+    flow_ref, _ = fw_beckmann(csr, edge_cost, D_reference, **fw_eval_params)
+
+    rng = np.random.default_rng(123)
+    observed_fraction = 0.10
+    mask = (rng.random(flow_ref.shape) < observed_fraction).astype(np.float64)
+    if mask.sum() == 0:
+        mask[0] = 1.0
+    print(f"Доля наблюдаемых потоков: {mask.mean():.0%}")
+
+    # KL-regularization strength: подбирать.
+    # Стартовые варианты: 1e-4, 1e-3, 1e-2 (в зависимости от масштабов D).
+    reg_lambda = 1e-3
+
+    results = run_mirror_descent(
+        csr,
+        edge_cost,
+        D_reference,
+        flow_ref,                 # f_hat = flow_ref (без шума)
+        fw_eval_params,
+        mask=mask,
+        n_iters=30,
+        plot_path=Path("objective_curve_main2.png"),
+        fro_plot_path=Path("fro_curve_main2.png"),
+        reg_kind="kl",
+        reg_lambda=reg_lambda,
+        D_prior=None             # возьмётся IPF-prior внутри
+    )
+
+    print_solution(
+        f"Сценарий main2: маска + KL-reg (lambda={reg_lambda:g})",
+        csr,
+        results["flow_final"],
+        results["times_final"],
+        results["obj_ref"],
+        results["obj_est"],
+    )
+
+
+def main3():
+    """
+    Аналог main1, но оптимизация OD-матрицы через Левенберга–Марквардта.
+    """
+    D_reference = load_od_matrix(OD_PATH)
+
+    csr, edge_cost = build_dense_graph(D_reference.shape[0])
+    fw_eval_params = {"max_iter": 30, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
+    flow_ref, _ = fw_beckmann(csr, edge_cost, D_reference, **fw_eval_params)
+
+    rng = np.random.default_rng(42)
+    noise = 0.05 * np.maximum(np.abs(flow_ref), 1.0) * rng.standard_normal(flow_ref.shape)
+    f_hat = flow_ref + noise
+
+    results = run_levenberg_marquardt(
+        csr,
+        edge_cost,
+        D_reference,
+        f_hat,
+        fw_eval_params,
+        n_iters=15,
+        plot_path=Path("objective_curve_main3.png"),
+    )
+
+    print_solution(
+        "Сценарий main3: шумленные потоки (LM)",
+        csr,
+        results["flow_final"],
+        results["times_final"],
+        results["obj_ref"],
+        results["obj_est"],
+    )
+
+
 def main4(
     OD_PATH: Path,
     load_od_matrix,
@@ -698,6 +1321,7 @@ def main4(
 
     allowed = np.ones((n, n), dtype=np.float64)
     np.fill_diagonal(allowed, 0.0)
+    ref_l1 = float(np.sum(np.abs(D_reference * allowed)))
 
     csr, edge_cost = build_dense_graph(n)
 
@@ -746,6 +1370,7 @@ def main4(
     exp_clip = 50.0
 
     obj_history = []
+    frob_history = []
 
     for it in range(n_iters_outer):
         flow, JT = fw_beckmann_soft(
@@ -811,6 +1436,8 @@ def main4(
             step0 *= 0.5
 
         obj_history.append(best_obj)
+        diff_l1 = float(np.sum(np.abs((D_est - D_reference) * allowed)))
+        frob_history.append(diff_l1 / max(ref_l1, 1e-12))
 
         print(
             f"outer={it:03d} obj={obj:.6e} best={best_obj:.6e} "
@@ -828,6 +1455,7 @@ def main4(
         verbose=False,
     )
     save_objective_curve(obj_history, Path("objective_curve_main4.png"), "Soft FW + KL mirror objective")
+    save_frobenius_curve(frob_history, Path("fro_curve_main4.png"), "Relative L1 error to reference")
 
     res_f = mask * (flow_final - f_hat)
     data_f = 0.5 * float(np.dot(res_f, res_f))
@@ -837,114 +1465,198 @@ def main4(
     print("diag mass =", float(np.sum(np.diag(D_est))))
 
 
-def main1():
+def main5(
+    OD_PATH: Path,
+    load_od_matrix,
+    build_dense_graph,
+    project_to_marginals_masked,
+    *,
+    observed_fraction: float = 0.10,
+    theta: float = 10.0,
+    reg_lambda: float = 1e-3,
+    n_iters_outer: int = 30,
+    max_iter_fw_hard: int = 30,
+    max_iter_fw_soft: int = 30,
+    rgap_target_hard: float = 1e-3,
+    seed: int = 123,
+):
     """
-    Проверка восстановления OD-матрицы при наличии шума в потоках.
-    """
-    D_reference = load_od_matrix(OD_PATH)
-
-    csr, edge_cost = build_dense_graph(D_reference.shape[0])
-    fw_eval_params = {"max_iter": 30, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
-    flow_ref, _ = fw_beckmann(csr, edge_cost, D_reference, **fw_eval_params)
-
-    rng = np.random.default_rng(42)
-    noise = 0.05 * np.maximum(np.abs(flow_ref), 1.0) * rng.standard_normal(flow_ref.shape)
-    f_hat = flow_ref + noise
-
-    results = run_mirror_descent(
-        csr,
-        edge_cost,
-        D_reference,
-        f_hat,
-        fw_eval_params,
-        plot_path=Path("objective_curve_main1.png"),
-    )
-
-    print_solution("Сценарий main1: шумленные потоки", csr, results["flow_final"], results["times_final"], results["obj_ref"], results["obj_est"])
-
-
-def main2():
-    """
-    Частично наблюдаемые потоки: оптимизируем по маске.
-    Добавляем KL-регуляризацию к prior.
+    Сравнение восстановления OD:
+      - hard Beckmann (run_mirror_descent)
+      - soft Beckmann как surrogate (run_mirror_descent_soft),
+    но итоговое качество меряем по "hard" метрикам (и по ошибке на OD, т.к. референс известен).
     """
     D_reference = load_od_matrix(OD_PATH)
+    n = D_reference.shape[0]
+    L_ref = D_reference.sum(axis=1)
+    W_ref = D_reference.sum(axis=0)
 
-    csr, edge_cost = build_dense_graph(D_reference.shape[0])
-    fw_eval_params = {"max_iter": 30, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
-    flow_ref, _ = fw_beckmann(csr, edge_cost, D_reference, **fw_eval_params)
+    allowed = np.ones((n, n), dtype=np.float64)
+    np.fill_diagonal(allowed, 0.0)
 
-    rng = np.random.default_rng(123)
-    observed_fraction = 0.10
-    mask = (rng.random(flow_ref.shape) < observed_fraction).astype(np.float64)
+    csr, edge_cost = build_dense_graph(n)
+
+    fw_eval_params_hard = {
+        "max_iter": max_iter_fw_hard,
+        "rgap_target": rgap_target_hard,
+        "verbose": False,
+        "use_numba": True,
+    }
+
+    # "наблюдения": генерим по обычному (hard) Бекману
+    f_hat = fw_beckmann_flow(csr, edge_cost, D_reference, **fw_eval_params_hard)
+
+    rng = np.random.default_rng(int(seed))
+    mask = (rng.random(f_hat.shape) < observed_fraction).astype(np.float64)
     if mask.sum() == 0:
         mask[0] = 1.0
-    print(f"Доля наблюдаемых потоков: {mask.mean():.0%}")
 
-    # KL-regularization strength: подбирать.
-    # Стартовые варианты: 1e-4, 1e-3, 1e-2 (в зависимости от масштабов D).
-    reg_lambda = 1e-3
-
-    results = run_mirror_descent(
-        csr,
-        edge_cost,
-        D_reference,
-        flow_ref,                 # f_hat = flow_ref (без шума)
-        fw_eval_params,
-        mask=mask,
-        n_iters=30,
-        plot_path=Path("objective_curve_main2.png"),
-        reg_kind="kl",
-        reg_lambda=reg_lambda,
-        D_prior=None             # возьмётся IPF-prior внутри
+    print(
+        f"main5: observed_fraction={mask.mean():.0%}, theta={theta}, reg_lambda={reg_lambda}, "
+        f"outer_iters={n_iters_outer}"
     )
 
-    print_solution(
-        f"Сценарий main2: маска + KL-reg (lambda={reg_lambda:g})",
-        csr,
-        results["flow_final"],
-        results["times_final"],
-        results["obj_ref"],
-        results["obj_est"],
-    )
+    # prior для KL: один и тот же для обоих методов
+    D_prior = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
+    D_prior = project_to_marginals_masked(D_prior, L_ref, W_ref, allowed, n_iters=80)
 
-
-def main3():
-    """
-    Аналог main1, но оптимизация OD-матрицы через Левенберга–Марквардта.
-    """
-    D_reference = load_od_matrix(OD_PATH)
-
-    csr, edge_cost = build_dense_graph(D_reference.shape[0])
-    fw_eval_params = {"max_iter": 30, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
-    flow_ref, _ = fw_beckmann(csr, edge_cost, D_reference, **fw_eval_params)
-
-    rng = np.random.default_rng(42)
-    noise = 0.05 * np.maximum(np.abs(flow_ref), 1.0) * rng.standard_normal(flow_ref.shape)
-    f_hat = flow_ref + noise
-
-    results = run_levenberg_marquardt(
+    # hard mirror descent (оптимизируем hard-объектив)
+    hard_results = run_mirror_descent(
         csr,
         edge_cost,
         D_reference,
         f_hat,
-        fw_eval_params,
-        n_iters=15,
-        plot_path=Path("objective_curve_main3.png"),
+        fw_eval_params_hard,
+        mask=mask,
+        n_iters=n_iters_outer,
+        plot_path=None,
+        fro_plot_path=None,
+        reg_kind="kl",
+        reg_lambda=reg_lambda,
+        D_prior=D_prior,
+        D_init=D_prior,
+        n_fd_checks=0,
     )
 
-    print_solution(
-        "Сценарий main3: шумленные потоки (LM)",
+    # soft mirror descent (оптимизируем soft-объектив, но меряем hard-объектив)
+    soft_results = run_mirror_descent_soft(
         csr,
-        results["flow_final"],
-        results["times_final"],
-        results["obj_ref"],
-        results["obj_est"],
+        edge_cost,
+        D_reference,
+        f_hat,
+        mask=mask,
+        theta=theta,
+        reg_lambda=reg_lambda,
+        D_prior=D_prior,
+        D_init=D_prior,
+        n_iters_outer=n_iters_outer,
+        max_iter_fw_soft=max_iter_fw_soft,
+        fw_eval_params_hard=fw_eval_params_hard,
+        eval_hard_every=1,
+    )
+
+    hard_metrics = od_error_metrics(hard_results["D_est"], D_reference, allowed)
+    hybrid_results = run_mirror_descent_hybrid(
+        csr,
+        edge_cost,
+        D_reference,
+        f_hat,
+        fw_eval_params_hard,
+        mask=mask,
+        theta=theta,
+        reg_lambda=reg_lambda,
+        D_prior=D_prior,
+        D_init=D_prior,
+        n_iters_outer=n_iters_outer,
+        max_iter_fw_soft=max_iter_fw_soft,
+    )
+    hybrid_metrics = od_error_metrics(hybrid_results["D_est"], D_reference, allowed)
+    soft_metrics = od_error_metrics(soft_results["D_est"], D_reference, allowed)
+
+    hard_obj_final = hard_objective_value(
+        csr,
+        edge_cost,
+        hard_results["D_est"],
+        f_hat,
+        fw_eval_params_hard,
+        mask=mask,
+        reg_lambda=reg_lambda,
+        D_prior=D_prior,
+        allowed=allowed,
+    )
+    hybrid_obj_final = hard_objective_value(
+        csr,
+        edge_cost,
+        hybrid_results["D_est"],
+        f_hat,
+        fw_eval_params_hard,
+        mask=mask,
+        reg_lambda=reg_lambda,
+        D_prior=D_prior,
+        allowed=allowed,
+    )
+    soft_obj_final = hard_objective_value(
+        csr,
+        edge_cost,
+        soft_results["D_est"],
+        f_hat,
+        fw_eval_params_hard,
+        mask=mask,
+        reg_lambda=reg_lambda,
+        D_prior=D_prior,
+        allowed=allowed,
+    )
+
+    print("\nmain5 summary (common metric = hard Beckmann objective):")
+    print(
+        "hard_md:",
+        f"hard_obj={hard_obj_final:.6e}",
+        f"rel_l1={hard_metrics['rel_l1']:.3e}",
+        f"mae={hard_metrics['mae']:.6e}",
+        f"rmse={hard_metrics['rmse']:.6e}",
+    )
+    print(
+        "hybrid_md:",
+        f"hard_obj={hybrid_obj_final:.6e}",
+        f"rel_l1={hybrid_metrics['rel_l1']:.3e}",
+        f"mae={hybrid_metrics['mae']:.6e}",
+        f"rmse={hybrid_metrics['rmse']:.6e}",
+    )
+    print(
+        "soft_md:",
+        f"hard_obj={soft_obj_final:.6e}",
+        f"rel_l1={soft_metrics['rel_l1']:.3e}",
+        f"mae={soft_metrics['mae']:.6e}",
+        f"rmse={soft_metrics['rmse']:.6e}",
+    )
+
+    # Графики сравнения (общие метрики)
+    save_comparison_curves(
+        {
+            "hard_md (opt hard)": hard_results["obj_history"],
+            "hybrid_md (hard obj, soft grad)": hybrid_results["obj_hard_history"],
+            "soft_md (eval hard)": soft_results["obj_hard_history"],
+        },
+        Path("objective_curve_main5_common.png"),
+        "Common objective: hard Beckmann (data+KL)",
+        "objective",
+        semilogy=True,
+    )
+    save_comparison_curves(
+        {
+            "hard_md": hard_results["frob_history"],
+            "hybrid_md": hybrid_results["frob_history"],
+            "soft_md": soft_results["frob_history"],
+        },
+        Path("fro_curve_main5.png"),
+        "OD reconstruction error (relative L1)",
+        "||D_k - D_ref||_1 / ||D_ref||_1",
+        semilogy=True,
     )
 
 
 if __name__ == "__main__":
-    main4(
+    main5(
         OD_PATH=OD_PATH,
         load_od_matrix=load_od_matrix,
         build_dense_graph=build_dense_graph,
@@ -953,5 +1665,8 @@ if __name__ == "__main__":
         theta=10.0,
         reg_lambda=1e-3,
         n_iters_outer=20,
-        max_iter_fw=20,
+        max_iter_fw_hard=30,
+        max_iter_fw_soft=30,
+        rgap_target_hard=1e-3,
+        seed=123,
     )
