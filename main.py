@@ -4,7 +4,7 @@ from typing import Dict
 import numpy as np
 
 from subfunctions import *
-from mirror_descent_completion import mirror_descent_completion
+from mirror_descent_completion import mirror_descent_completion, project_to_marginals_masked
 from optimize_results_dto import MirrorDescentResult
 from src.od_matrix_completion.core.models.manyalli_written_beckmann import fw_beckmann_flow
 
@@ -17,6 +17,10 @@ def run_completion(
     modes_tuple: tuple,
     observed_fraction: float = 0.15,
     reference_noise_level: float = 0.005,
+    mask_seed: int = 123,
+    preserve_true_marginals: bool = True,
+    flow_noise_level: float = 0.0,
+    flow_noise_seed: int = 123,
 ) -> Dict[str, MirrorDescentResult]:
     """Запускает эксперимент по восстановлению OD-матрицы по частично наблюдаемым потокам.
 
@@ -44,6 +48,13 @@ def run_completion(
     D_reference = np.maximum(D_reference, 0.0)
     np.fill_diagonal(D_reference, 0.0)
 
+    if preserve_true_marginals:
+        allowed = np.ones_like(D_reference, dtype=np.float64)
+        np.fill_diagonal(allowed, 0.0)
+        L_true = D_reference_true.sum(axis=1)
+        W_true = D_reference_true.sum(axis=0)
+        D_reference = project_to_marginals_masked(D_reference, L_true, W_true, allowed, n_iters=80)
+
     # Маршрутный граф
     csr, edge_cost = build_dense_graph(D_reference.shape[0])
 
@@ -57,13 +68,18 @@ def run_completion(
     flow_ref = fw_beckmann_flow(csr, edge_cost, D_reference_true, **fw_hard_kwargs)
 
     # Маска для удаления информации о части потоков
-    rng_mask = np.random.default_rng()
+    rng_mask = np.random.default_rng(int(mask_seed))
     mask = (rng_mask.random(flow_ref.shape) < observed_fraction).astype(np.float64)
     if mask.sum() == 0:
         mask[0] = 1.0
-    f_hat = flow_ref.copy()
 
-    n_iters = 50                                    # кол-во итераций зеркального спуска
+    f_hat = flow_ref.copy()
+    if flow_noise_level > 0.0:
+        rng_noise = np.random.default_rng(int(flow_noise_seed))
+        noise = float(flow_noise_level) * np.maximum(np.abs(flow_ref), 1.0) * rng_noise.standard_normal(flow_ref.shape)
+        f_hat = flow_ref + mask * noise
+
+    n_iters = 30                                    # кол-во итераций зеркального спуска
     results: Dict[str, MirrorDescentResult] = {}    # словарь хранения результатов
     
     for mode in modes_tuple:
@@ -78,6 +94,8 @@ def run_completion(
             mode=mode,
             mask=mask,
             reg_lambda=1e-3,
+            D_prior=D_reference,
+            D_target=D_reference_true,
             n_iters=n_iters,
             fw_hard_kwargs=fw_hard_kwargs,
             fw_soft_kwargs=fw_soft_kwargs,
@@ -88,9 +106,17 @@ def run_completion(
         results[mode] = res
 
         final_obj = res.objective_history[-1]
+        final_data = res.data_history[-1] if res.data_history else float("nan")
+        final_kl = res.kl_history[-1]
         final_rel = res.rel_l1_history[-1]
+        final_rel_true = (
+            res.rel_l1_target_history[-1] if res.rel_l1_target_history is not None else float("nan")
+        )
         switch_msg = f", switch_iter={res.switch_iter}" if res.switch_iter is not None else ""
-        print(f"  final objective={final_obj:.6e}, rel_l1={final_rel:.3e}{switch_msg}")
+        print(
+            f"  final objective={final_obj:.6e} (data={final_data:.6e}, kl={final_kl:.6e}), "
+            f"rel_l1_ref={final_rel:.3e}, rel_l1_true={final_rel_true:.3e}{switch_msg}"
+        )
 
     return results
 
@@ -111,8 +137,22 @@ def main():
     plot_history(
         {name: res.objective_history for name, res in results.items()},
         Path("plots/objective_curves.png"),
-        f"Hard objective (observed {observed_fraction:.0%} flows)",
+        f"Objective = data + λ·KL (observed {observed_fraction:.0%} flows)",
         "objective",
+        semilogy=True,
+    )
+    plot_history(
+        {name: res.data_history for name, res in results.items()},
+        Path("plots/data_curves.png"),
+        f"Data term on observed flows (observed {observed_fraction:.0%})",
+        "data",
+        semilogy=True,
+    )
+    plot_history(
+        {name: res.kl_history for name, res in results.items()},
+        Path("plots/kl_curves.png"),
+        f"KL(D || D_prior) (observed {observed_fraction:.0%})",
+        "kl",
         semilogy=True,
     )
     plot_history(
@@ -120,6 +160,17 @@ def main():
         Path("plots/rel_l1_curves.png"),
         f"||D_k - D_ref||_1 / ||D_ref||_1 (observed {observed_fraction:.0%})",
         "relative L1 error",
+        semilogy=True,
+    )
+    plot_history(
+        {
+            name: res.rel_l1_target_history
+            for name, res in results.items()
+            if res.rel_l1_target_history is not None
+        },
+        Path("plots/rel_l1_true_curves.png"),
+        f"||D_k - D_true||_1 / ||D_true||_1 (observed {observed_fraction:.0%})",
+        "relative L1 error (to true)",
         semilogy=True,
     )
 

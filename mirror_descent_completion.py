@@ -79,6 +79,7 @@ def mirror_descent_completion(
     reg_lambda: float = 0.0,
     D_prior: Optional[np.ndarray] = None,
     D_init: Optional[np.ndarray] = None,
+    D_target: Optional[np.ndarray] = None,
     n_iters: int = 30,
     fw_hard_kwargs: Optional[Dict] = None,
     fw_soft_kwargs: Optional[Dict] = None,
@@ -120,6 +121,9 @@ def mirror_descent_completion(
 
         D_init (Optional[np.ndarray], optional): Начальное приближение ``D`` (форма ``(n, n)``). Если None,
             берётся ранг-1 матрица из маргиналий и затем проецируется. По умолчанию None.
+
+        D_target (Optional[np.ndarray], optional): Если задано, дополнительно считает историю относительной L1-ошибки
+            ``||D_k - D_target||_1 / ||D_target||_1`` (только диагностика, в оптимизацию не входит). По умолчанию None.
 
         n_iters (int, optional): Число итераций зеркального спуска. По умолчанию 30.
 
@@ -173,6 +177,13 @@ def mirror_descent_completion(
     W_ref = D_reference.sum(axis=0)
     ref_l1 = float(np.sum(np.abs(D_reference * allowed)))
 
+    target_l1 = None
+    if D_target is not None:
+        D_target = np.asarray(D_target, dtype=np.float64)
+        if D_target.shape != (n, n):
+            raise ValueError(f"D_target must have shape {(n, n)}, got {D_target.shape}")
+        target_l1 = float(np.sum(np.abs(D_target * allowed)))
+
     if fw_hard_kwargs is None:
         fw_hard_kwargs = {"max_iter": 30, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
     if fw_soft_kwargs is None:
@@ -225,6 +236,12 @@ def mirror_descent_completion(
         diff = float(np.sum(np.abs((D - D_reference) * allowed)))
         return diff / max(ref_l1, 1e-12)
 
+    def rel_l1_target(D: np.ndarray) -> float:
+        if D_target is None:
+            raise RuntimeError("D_target is None")
+        diff = float(np.sum(np.abs((D - D_target) * allowed)))
+        return diff / max(target_l1 or 0.0, 1e-12)
+
     def objective_value(D: np.ndarray) -> Tuple[float, float, np.ndarray]:
         flow_val = fw_beckmann_flow(csr, edge_cost, D, **fw_hard_kwargs)
         residual = _apply_mask(flow_val - f_hat, mask)
@@ -264,16 +281,26 @@ def mirror_descent_completion(
 
     # стартовая оценка
     obj, grad, flow_current, kl_val, grad_source = evaluate_with_gradient(D_est, use_soft_grad)
+    grad_norm = float(np.linalg.norm(grad))
 
     objective_history = [obj]
     kl_history = [kl_val]
     rel_l1_history = [rel_l1(D_est)]
+    rel_l1_target_history = [rel_l1_target(D_est)] if D_target is not None else None
     gradient_sources = [grad_source]
+    data_history = [obj - reg_lambda * kl_val]
+    residual_full0 = flow_current - f_hat
+    data_full_history = [0.5 * float(np.dot(residual_full0, residual_full0))]
+    step_history: list[float] = []
+    ls_trials_history: list[int] = []
+    accepted_history: list[bool] = []
+    grad_norm_history: list[float] = [grad_norm]
 
     for it in range(n_iters):
         if progress_callback is not None:
             progress_callback(it, n_iters, mode)
         step = step0
+        step_used = step
         accepted = False
         best_D = D_est
         best_obj = obj
@@ -295,9 +322,11 @@ def mirror_descent_completion(
                 best_kl = cand_kl
                 best_flow = cand_flow
                 accepted = True
+                step_used = step
                 break
 
             step *= ls_beta
+            step_used = step
             if step < ls_min:
                 break
 
@@ -313,6 +342,7 @@ def mirror_descent_completion(
 
         # пересчитываем градиент для следующего шага (вдруг сменился режим)
         obj_eval, grad, flow_current, kl_val_eval, grad_source = evaluate_with_gradient(D_est, use_soft_grad)
+        grad_norm = float(np.linalg.norm(grad))
         # обновляем запись, чтобы истории шли от одной и той же оценки
         obj = obj_eval
         kl_val = kl_val_eval
@@ -320,7 +350,16 @@ def mirror_descent_completion(
         objective_history.append(obj)
         kl_history.append(kl_val)
         rel_l1_history.append(rel_l1(D_est))
+        if rel_l1_target_history is not None:
+            rel_l1_target_history.append(rel_l1_target(D_est))
         gradient_sources.append(grad_source)
+        data_history.append(obj - reg_lambda * kl_val)
+        residual_full = flow_current - f_hat
+        data_full_history.append(0.5 * float(np.dot(residual_full, residual_full)))
+        step_history.append(float(step_used))
+        ls_trials_history.append(int(trials_used))
+        accepted_history.append(bool(accepted))
+        grad_norm_history.append(grad_norm)
 
         # переключение режима после стагнации на окне из stall_iters итераций
         if mode == "auto_soft" and not use_soft_grad:
@@ -346,5 +385,12 @@ def mirror_descent_completion(
         rel_l1_history=rel_l1_history,
         kl_history=kl_history,
         gradient_sources=gradient_sources,
+        data_history=data_history,
+        data_full_history=data_full_history,
+        step_history=step_history,
+        ls_trials_history=ls_trials_history,
+        accepted_history=accepted_history,
+        grad_norm_history=grad_norm_history,
+        rel_l1_target_history=rel_l1_target_history,
         switch_iter=switch_iter,
     )
