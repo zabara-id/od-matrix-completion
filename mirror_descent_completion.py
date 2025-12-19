@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from typing import Callable, Dict, Literal, Optional, Tuple
 
 import numpy as np
@@ -13,6 +12,7 @@ from src.od_matrix_completion.core.models.manyalli_written_beckmann import (
 )
 from src.od_matrix_completion.core.models.soft_beckmann import fw_beckmann_soft
 
+
 MirrorMode = Literal["hard", "soft_grad", "auto_soft"]
 
 
@@ -25,7 +25,7 @@ def project_to_marginals_masked(
     eps: float = 1e-12,
 ) -> np.ndarray:
     """
-    IPF/Sinkhorn-подобная проекция на заданные маргиналии (L, W) с сохранением структурных нулей.
+    IPF проекция на заданные маргиналии (L, W) с сохранением структурных нулей.
     """
     D_proj = np.maximum(D, 0.0) * allowed
 
@@ -68,7 +68,7 @@ def _apply_mask(vec: np.ndarray, mask: Optional[np.ndarray]) -> np.ndarray:
     return vec * mask
 
 
-def mirror_descent_beckmann(
+def mirror_descent_completion(
     csr: CSRGraph,
     edge_cost: BRP,
     f_hat: np.ndarray,
@@ -93,13 +93,73 @@ def mirror_descent_beckmann(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     switch_callback: Optional[Callable[[int], None]] = None,
 ) -> MirrorDescentResult:
-    """
-    Зеркальный спуск по OD-матрице с KL-регуляризацией.
+    """Зеркальный спуск для восстановления OD-матрицы по наблюдаемым потокам в модели Бекмана.
 
-    Режимы:
-      - "hard": потоки и градиент через обычный Бекманн;
-      - "soft_grad": потоки считаются по обычному Бекманну, градиент берётся из soft Beckmann;
-      - "auto_soft": начинаем как "hard", переключаем градиент на soft если objective стагнирует `stall_iters` шагов.
+    Ищет ``D`` (с фиксированными маргиналиями из ``D_reference``), минимизируя невязку между
+    потоками на рёбрах графа и наблюдениями ``f_hat``; опционально добавляет KL-регуляризацию.
+
+    ``m`` — число рёбер графа, поэтому векторы потоков имеют размер ``(m,)``.
+
+    Args:
+        csr (CSRGraph): Граф в CSR-представлении (используется в решателе Бекмана).
+
+        edge_cost (BRP): Функция стоимости на рёбрах (например, BPR), вызывается как ``edge_cost(flow)``.
+
+        f_hat (np.ndarray): Наблюдаемый вектор потоков на рёбрах, форма ``(m,)``.
+
+        D_reference (np.ndarray): Опорная OD-матрица формы ``(n, n)``; её маргиналии фиксируются.
+
+        mode (MirrorMode, optional): Режим градиента: ``hard``/``soft_grad``/``auto_soft``. По умолчанию "hard".
+
+        mask (Optional[np.ndarray], optional): Маска на компоненты потока (форма ``(m,)``). По умолчанию None.
+
+        reg_lambda (float, optional): Вес KL-регуляризации. По умолчанию 0.0.
+
+        D_prior (Optional[np.ndarray], optional): Prior для KL (форма ``(n, n)``). Если None, строится из
+            ``D_reference`` с малым шумом и проекцией на маргиналии. По умолчанию None.
+
+        D_init (Optional[np.ndarray], optional): Начальное приближение ``D`` (форма ``(n, n)``). Если None,
+            берётся ранг-1 матрица из маргиналий и затем проецируется. По умолчанию None.
+
+        n_iters (int, optional): Число итераций зеркального спуска. По умолчанию 30.
+
+        fw_hard_kwargs (Optional[Dict], optional): Параметры для ``fw_beckmann``/``fw_beckmann_flow``.
+            По умолчанию None (используются значения внутри функции).
+
+        fw_soft_kwargs (Optional[Dict], optional): Параметры для ``fw_beckmann_soft``.
+            По умолчанию None (используются значения внутри функции).
+
+        step0 (float, optional): Начальный шаг для бэктрекинга. По умолчанию 1e-2.
+
+        ls_beta (float, optional): Множитель уменьшения шага при неудаче (``step <- step * ls_beta``). По умолчанию 0.5.
+
+        ls_min (float, optional): Минимально допустимый шаг в бэктрекинге. По умолчанию 1e-12.
+
+        ls_max_trials (int, optional): Максимум попыток бэктрекинга на итерацию. По умолчанию 50.
+
+        improve_eps (float, optional): Требуемое улучшение цели для принятия шага. По умолчанию 1e-12.
+
+        kl_eps (float, optional): Нижний порог для предотвращения логарифма от нуля в KL. По умолчанию 1e-12.
+
+        stall_iters (int, optional): Окно для детектора стагнации в режиме ``auto_soft``. По умолчанию 3.
+
+        stall_tol (float, optional): Порог относительной стагнации по цели на окне. По умолчанию 1e-4.
+
+        progress_callback (Optional[Callable[[int, int, str], None]], optional): Колбэк прогресса
+            ``progress_callback(it, n_iters, mode)``. По умолчанию None.
+
+        switch_callback (Optional[Callable[[int], None]], optional): Колбэк при переключении в ``auto_soft``:
+            ``switch_callback(iteration)``. По умолчанию None.
+
+    Raises:
+        ValueError: Если ``mode`` не входит в {"hard", "soft_grad", "auto_soft"}.
+        ValueError: Если ``f_hat`` имеет форму, отличную от ``(csr.m,)``.
+        ValueError: Если ``mask`` задана и её форма не совпадает с формой ``f_hat``.
+        ValueError: Если ``D_prior`` задан и его форма не равна ``(n, n)``.
+        ValueError: Если ``D_init`` задан и его форма не равна ``(n, n)``.
+
+    Returns:
+        MirrorDescentResult: Результаты оптимизации (``D_final``, ``flow_final``, история цели/метрик и служебные поля).
     """
     if mode not in {"hard", "soft_grad", "auto_soft"}:
         raise ValueError(f"Unknown mode={mode}")
