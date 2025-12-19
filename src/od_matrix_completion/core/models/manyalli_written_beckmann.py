@@ -83,7 +83,54 @@ class CSRGraph:
                     heapq.heappush(pq, (nd, v))
 
         return dist, pe
+    
+    def draw(self):
+        import matplotlib.pyplot as plt
+        n = self.n
 
+        # позиции вершин по окружности
+        t = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        pos = np.c_[np.cos(t), np.sin(t)]
+
+        plt.figure()
+        ax = plt.gca()
+
+        # рёбра
+        for u in range(n):
+            for eid in self.out_eid[self.first_out[u]:self.first_out[u + 1]]:
+                v = self.head[eid]
+                x1, y1 = pos[u]
+                x2, y2 = pos[v]
+                ax.annotate(
+                    "",
+                    xy=(x2, y2),
+                    xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle="->", lw=0.8),
+                )
+
+        # вершины
+        ax.scatter(pos[:, 0], pos[:, 1], s=80)
+
+        # подписи
+        for i, (x, y) in enumerate(pos):
+            ax.text(x, y, str(i), ha="center", va="center", color="white")
+
+        ax.set_aspect("equal")
+        ax.axis("off")
+        plt.show()
+
+    def to_networkx(self):
+        import networkx as nx
+
+        G = nx.DiGraph()
+        G.add_nodes_from(range(self.n))
+
+        for u in range(self.n):
+            for eid in self.out_eid[self.first_out[u]: self.first_out[u + 1]]:
+                v = int(self.head[eid])
+                G.add_edge(u, v, eid=int(eid))
+
+        return G
 
 # ============================================================
 # Beckmann model components
