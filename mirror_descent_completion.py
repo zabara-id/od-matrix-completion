@@ -40,6 +40,18 @@ def project_to_marginals_masked(
         D_proj *= col_scale
         D_proj *= allowed
 
+    # row_residual = np.sum(D_proj, axis=1) - L
+    # col_residual = np.sum(D_proj, axis=0) - W
+    # print(
+    #     "[project_to_marginals_masked] L (rows) L1 error:",
+    #     np.linalg.norm(row_residual, ord=1),
+    #     "max abs:", np.max(np.abs(row_residual)),
+    # )
+    # print(
+    #     "[project_to_marginals_masked] W (cols) L1 error:",
+    #     np.linalg.norm(col_residual, ord=1),
+    #     "max abs:", np.max(np.abs(col_residual)),
+    # )
     return D_proj
 
 
@@ -222,15 +234,22 @@ def mirror_descent_completion(
         D_prior = np.maximum(D_prior, kl_eps)
         D_prior *= allowed
 
-    if D_init is None:
-        D_est = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
-        D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=80)
-    else:
-        D_est = np.asarray(D_init, dtype=np.float64)
-        if D_est.shape != (n, n):
-            raise ValueError(f"D_init must have shape {(n, n)}, got {D_est.shape}")
-        D_est = np.maximum(D_est, 0.0) * allowed
-        D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=50)
+    # if D_init is None:
+    #     D_est = np.outer(L_ref, W_ref) / max(W_ref.sum(), 1e-12)
+    #     D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=80)
+    # else:
+    #     D_est = np.asarray(D_init, dtype=np.float64)
+    #     if D_est.shape != (n, n):
+    #         raise ValueError(f"D_init must have shape {(n, n)}, got {D_est.shape}")
+    #     D_est = np.maximum(D_est, 0.0) * allowed
+    #     D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=50)
+
+    u, Sigma, v = np.linalg.svd(D_reference)
+    Sigma[-12:-1] = 0
+
+    D_est = project_to_marginals_masked(u @ np.diag(Sigma) @ v, L_ref, W_ref, allowed)
+
+    print("D_est - D_reference = ", np.linalg.norm(D_est - D_reference))
 
     def rel_l1(D: np.ndarray) -> float:
         diff = float(np.sum(np.abs((D - D_reference) * allowed)))

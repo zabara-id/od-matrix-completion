@@ -17,6 +17,9 @@ def run_completion(
     modes_tuple: tuple,
     observed_fraction: float = 0.15,
     reference_noise_level: float = 0.005,
+    reg_lambda: float = 1e-3,
+    md_step0: float = 1e-2,
+    theta: float = 10.0,
     mask_seed: int = 123,
     preserve_true_marginals: bool = True,
     flow_noise_level: float = 0.0,
@@ -43,7 +46,8 @@ def run_completion(
     
     # Референс для KL регуляризатора - слегка зашумленная истинная матрица корреспонденция
     rng = np.random.default_rng(123)
-    ref_noise = reference_noise_level * rng.standard_normal(D_reference_true.shape)
+    # ref_noise = reference_noise_level * rng.standard_normal(D_reference_true.shape)
+    ref_noise = 0
     D_reference = D_reference_true * (1.0 + ref_noise)
     D_reference = np.maximum(D_reference, 0.0)
     np.fill_diagonal(D_reference, 0.0)
@@ -59,10 +63,22 @@ def run_completion(
     csr, edge_cost = build_dense_graph(D_reference.shape[0])
 
     # Параметры для Франк-Вульфа решения модели Бекмана
-    fw_hard_kwargs = {"max_iter": 30, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
+    fw_hard_kwargs = {
+        "max_iter": 200,
+        "rgap_target": 1e-3,
+        "verbose": False,
+        "use_numba": True
+    }
 
     # Параметры для Франк-Вульфа решения модели soft-Бекмана
-    fw_soft_kwargs = {"max_iter": 30, "theta": 10.0, "delta_rel": 0.02, "delta_abs": 1e-3, "verbose": False, "use_numba": True}
+    fw_soft_kwargs = {
+        "max_iter": 200,
+        "theta": float(theta),
+        "delta_rel": 0.02,
+        "delta_abs": 1e-3,
+        "verbose": False,
+        "use_numba": True,
+    }
 
     # Потоки на рёбрах по модели бекмана 
     flow_ref = fw_beckmann_flow(csr, edge_cost, D_reference_true, **fw_hard_kwargs)
@@ -93,10 +109,11 @@ def run_completion(
             D_reference=D_reference,
             mode=mode,
             mask=mask,
-            reg_lambda=1e-3,
+            reg_lambda=float(reg_lambda),
             D_prior=D_reference,
             D_target=D_reference_true,
             n_iters=n_iters,
+            step0=float(md_step0),
             fw_hard_kwargs=fw_hard_kwargs,
             fw_soft_kwargs=fw_soft_kwargs,
             progress_callback=progress_cb,
@@ -112,19 +129,24 @@ def run_completion(
         final_rel_true = (
             res.rel_l1_target_history[-1] if res.rel_l1_target_history is not None else float("nan")
         )
+        accept_rate = float(np.mean(res.accepted_history)) if res.accepted_history else float("nan")
+        last_step = res.step_history[-1] if res.step_history else float("nan")
+        last_trials = res.ls_trials_history[-1] if res.ls_trials_history else -1
         switch_msg = f", switch_iter={res.switch_iter}" if res.switch_iter is not None else ""
         print(
             f"  final objective={final_obj:.6e} (data={final_data:.6e}, kl={final_kl:.6e}), "
-            f"rel_l1_ref={final_rel:.3e}, rel_l1_true={final_rel_true:.3e}{switch_msg}"
+            f"rel_l1_ref={final_rel:.3e}, rel_l1_true={final_rel_true:.3e}, "
+            f"accept={accept_rate:.0%}, last_step={last_step:.2e}, last_ls_trials={last_trials}{switch_msg}"
         )
 
     return results
 
 
 def main():
-    observed_fraction = 0.20                        # доля известных потоков
+    observed_fraction = 1                           # доля известных потоков
     D_reference_true = load_od_matrix(OD_PATH)      # известная матрица корреспонденций
-    modes = ("hard", "soft_grad", "auto_soft")      # режимы работы зеркального спуска
+    # modes = ("hard", "soft_grad", "auto_soft")      # режимы работы зеркального спуска
+    modes = ("hard", )      # режимы работы зеркального спуска
 
     # Запуск моделирования
     results = run_completion(
