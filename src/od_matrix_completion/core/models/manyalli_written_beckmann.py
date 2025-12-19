@@ -222,6 +222,21 @@ def fw_beckmann(
 
     return flow, gradient
 
+
+class ls_problem:
+    def __init__(self, csr, edge_cost, f_hat):
+        self.graph = csr
+        self.edge_cost = edge_cost
+        self.f_hat
+
+    def __call__(self, D):
+        f_d, gradient = fw_beckmann(self.graph, edge_cost, D)
+        x = f_d - self.f_hat
+        residual_value = np.linalg.norm(x)
+        gradient_of_residual_value = 2 * gradient.T @ x
+        return residual_value, gradient_of_residual_value
+
+
 # ============================================================
 # Example
 # 
