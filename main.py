@@ -18,6 +18,24 @@ def run_completion(
     observed_fraction: float = 0.15,
     reference_noise_level: float = 0.005,
 ) -> Dict[str, MirrorDescentResult]:
+    """Запускает эксперимент по восстановлению OD-матрицы по частично наблюдаемым потокам.
+
+    Строит маршрутный граф, считает истинные потоки ``f_hat`` из ``D_reference_true``,
+    затем скрывает часть компонент потока с помощью маски (наблюдается доля ``observed_fraction``)
+    и для каждого режима из ``modes_tuple`` запускает ``mirror_descent_completion``.
+
+    Args:
+        D_reference_true (np.ndarray): Истинная OD-матрица (форма ``(n, n)``), по которой генерируются наблюдения.
+
+        modes_tuple (tuple): Набор режимов зеркального спуска (например: ``("hard", "soft_grad", "auto_soft")``).
+
+        observed_fraction (float, optional): Доля наблюдаемых компонент потока (от 0 до 1). По умолчанию 0.15.
+
+        reference_noise_level (float, optional): Уровень шума для построения ``D_reference`` (референс для KL), как гауссов шум. По умолчанию 0.005.
+
+    Returns:
+        Dict[str, MirrorDescentResult]: Словарь ``mode -> результат`` (траектория целевой функции и метрик, финальные значения).
+    """
     
     # Референс для KL регуляризатора - слегка зашумленная истинная матрица корреспонденция
     rng = np.random.default_rng(123)
@@ -45,8 +63,8 @@ def run_completion(
         mask[0] = 1.0
     f_hat = flow_ref.copy()
 
-    n_iters = 50
-    results: Dict[str, MirrorDescentResult] = {}
+    n_iters = 50                                    # кол-во итераций зеркального спуска
+    results: Dict[str, MirrorDescentResult] = {}    # словарь хранения результатов
     
     for mode in modes_tuple:
         print(f"\nЗапуск зеркального спуска в режиме '{mode}' (наблюдается {mask.mean():.0%} потоков)")
@@ -85,10 +103,9 @@ def main():
     # Запуск моделирования
     results = run_completion(
         D_reference_true,
+        modes,
         observed_fraction=observed_fraction,
         reference_noise_level=0.005,
-        mask_seed=42,
-        exact_mask=True,
     )
 
     plot_history(
