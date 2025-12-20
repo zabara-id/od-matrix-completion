@@ -117,7 +117,7 @@ def mirror_descent_completion_l1(
         u, Sigma, v = np.linalg.svd(D_reference)
         Sigma[2:-1] = Sigma[2:-1] * 2
         Sigma[-1]=0
-        print(Sigma)
+        # print(Sigma)
         D_est = project_to_marginals_masked(u @ np.diag(Sigma) @ v, L_ref, W_ref, allowed)
         print("D_est - D_reference = ", np.linalg.norm(D_est - D_reference, ord=1) / np.linalg.norm(D_reference, ord=1))
     else:

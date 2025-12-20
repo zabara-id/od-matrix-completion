@@ -73,10 +73,15 @@ def run_completion_l1(
 
     flow_ref = fw_beckmann_flow(csr, edge_cost, D_true, **fw_hard_kwargs)
 
-    rng_mask = np.random.default_rng(int(mask_seed))
-    mask = (rng_mask.random(flow_ref.shape) < float(observed_fraction)).astype(np.float64)
-    if mask.sum() == 0:
-        mask[0] = 1.0
+    # rng_mask = np.random.default_rng(int(mask_seed))
+    # mask = (rng_mask.random(flow_ref.shape) < float(observed_fraction)).astype(np.float64)
+    # if mask.sum() == 0:
+    #     mask[0] = 1.0
+
+    # можно тут играться с тем куда ставить датчики
+    indexes = np.argsort(flow_ref)
+    mask = np.zeros(flow_ref.shape)
+    mask[indexes[-10:]] = 1
 
     f_hat = flow_ref.copy()
     if float(flow_noise_level) > 0.0:
@@ -174,17 +179,17 @@ def main():
         beta=4,
     )
 
-    observed_fraction = 0.2
+    observed_fraction = 0.1
     modes = ("hard",)
 
     results = run_completion_l1(
         D_true,
         modes,
         csr=graph,
-        n_iters=50,
+        n_iters=100,
         edge_cost=edge_cost,
         observed_fraction=float(observed_fraction),
-        reference_noise_level=0.00,
+        reference_noise_level=0.3,
         reg_lambda=5e2,
     )
 
