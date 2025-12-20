@@ -218,8 +218,8 @@ def mirror_descent_completion(
 
     if D_prior is None:
         rng = np.random.default_rng(0)
-        noise = 0.005 * rng.standard_normal(D_reference.shape)
-        D_prior = D_reference * (1.0 + noise)
+        noise = 0.00 * rng.standard_normal(D_reference.shape)
+        D_prior = D_reference #* (1.0 + noise)
         D_prior = np.maximum(D_prior, kl_eps)
         np.fill_diagonal(D_prior, 0.0)
         D_prior = project_to_marginals_masked(D_prior, L_ref, W_ref, allowed, n_iters=30)
@@ -228,6 +228,7 @@ def mirror_descent_completion(
     if D_prior.shape != (n, n):
         raise ValueError(f"D_prior must have shape {(n, n)}, got {D_prior.shape}")
     D_prior = np.maximum(D_prior, 0.0) * allowed
+    np.fill_diagonal(D_prior, 0.0)
 
     if reg_lambda > 0.0 and np.any(D_prior <= 0.0):
         # для KL избегаем нулей в prior
@@ -244,12 +245,14 @@ def mirror_descent_completion(
     #     D_est = np.maximum(D_est, 0.0) * allowed
     #     D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed, n_iters=50)
 
+    # !!!!!
     u, Sigma, v = np.linalg.svd(D_reference)
-    Sigma[-12:-1] = 0
+    Sigma[-3:-1] = 0
 
     D_est = project_to_marginals_masked(u @ np.diag(Sigma) @ v, L_ref, W_ref, allowed)
+    np.fill_diagonal(D_est, 0.0)
 
-    print("D_est - D_reference = ", np.linalg.norm(D_est - D_reference))
+    print("D_est - D_reference = ", np.linalg.norm(D_est - D_reference, ord=1) / np.linalg.norm(D_reference, ord=1))
 
     def rel_l1(D: np.ndarray) -> float:
         diff = float(np.sum(np.abs((D - D_reference) * allowed)))
@@ -307,7 +310,8 @@ def mirror_descent_completion(
     rel_l1_history = [rel_l1(D_est)]
     rel_l1_target_history = [rel_l1_target(D_est)] if D_target is not None else None
     gradient_sources = [grad_source]
-    data_history = [obj - reg_lambda * kl_val]
+    # data_history = [obj - reg_lambda * kl_val]
+    data_history = [np.linalg.norm(flow_current - f_hat, ord=1) / np.linalg.norm(f_hat, ord=1)]
     residual_full0 = flow_current - f_hat
     data_full_history = [0.5 * float(np.dot(residual_full0, residual_full0))]
     step_history: list[float] = []
@@ -372,7 +376,7 @@ def mirror_descent_completion(
         if rel_l1_target_history is not None:
             rel_l1_target_history.append(rel_l1_target(D_est))
         gradient_sources.append(grad_source)
-        data_history.append(obj - reg_lambda * kl_val)
+        data_history.append(np.linalg.norm(flow_current - f_hat, ord=1) / np.linalg.norm(f_hat, ord=1))
         residual_full = flow_current - f_hat
         data_full_history.append(0.5 * float(np.dot(residual_full, residual_full)))
         step_history.append(float(step_used))

@@ -91,6 +91,19 @@ class CSRGraph:
                     heapq.heappush(pq, (nd, v))
 
         return dist, pe
+    
+    def to_networkx(self):
+        import networkx as nx
+
+        G = nx.DiGraph()
+        G.add_nodes_from(range(self.n))
+
+        for u in range(self.n):
+            for eid in self.out_eid[self.first_out[u]: self.first_out[u + 1]]:
+                v = int(self.head[eid])
+                G.add_edge(u, v, eid=int(eid))
+
+        return G
 
 
 # ============================================================

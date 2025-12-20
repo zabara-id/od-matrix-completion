@@ -18,9 +18,11 @@ def load_example_data():
     net.columns = ["newline", "a_node", "b_node", "capacity", "length", "free_flow_time", "b", "power", "speed", "toll", "link_type", "terminator"]
     net.drop(columns=["newline", "terminator"], index=[76], inplace=True)
     network = net[['a_node', 'b_node', "capacity", 'free_flow_time']]
+    print(network.head())
     network = network.assign(direction=1)
-    network["link_id"] = network.index + 1
+    network["link_id"] = network.index
     network = network.astype({"a_node":"int64", "b_node": "int64"})
+    print(network.head())
     return network, mtx, index
 
 def main():
@@ -28,16 +30,22 @@ def main():
     # 1) links -- это рёбра и их харакретистики в терминах задачи
     # 2) zones -- это названия зон, для которых считается OD матрица
     # 3) D -- это сама OD матрица (самое простое, что может быть тут)
-    links, D, zones = load_example_data()
+    links, D_old, zones = load_example_data()
+
+    # D = np.genfromtxt("matrix.csv")
+
+    D = np.loadtxt("matrix.csv", delimiter=",", dtype=float)
+
+    print(" 🐗: ",np.linalg.norm(D_old - D, ord=1) / np.linalg.norm(D_old, ord=1))
+
+    print(D.shape)
 
     solver = BeckmannSolver(links, zones)
     solver.setup_assignment(D)
-    print(solver.links_)
-
     solver.solve()
 
     res = solver.results()
-    print(res)
+    print(res['flow'].to_numpy())
 
 
 if __name__ == "__main__":

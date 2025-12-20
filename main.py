@@ -2,19 +2,26 @@ from pathlib import Path
 from typing import Dict
 
 import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
 
 from subfunctions import *
 from mirror_descent_completion import mirror_descent_completion, project_to_marginals_masked
 from optimize_results_dto import MirrorDescentResult
 from src.od_matrix_completion.core.models.manyalli_written_beckmann import fw_beckmann_flow
 
+from src.od_matrix_completion.core.models.manyalli_written_beckmann import CSRGraph, BRP
+
 
 OD_PATH = Path("data/processed/Mat_Car_ev.csv")
-
+net_file = "https://raw.githubusercontent.com/bstabler/TransportationNetworks/master/SiouxFalls/SiouxFalls_net.tntp"
+demand_file = "https://raw.githubusercontent.com/bstabler/TransportationNetworks/master/SiouxFalls/CSV-data/SiouxFalls_od.csv"
 
 def run_completion(
     D_reference_true: np.ndarray,
     modes_tuple: tuple,
+    csr = None,
+    edge_cost = None,
     observed_fraction: float = 0.15,
     reference_noise_level: float = 0.005,
     reg_lambda: float = 1e-3,
@@ -60,7 +67,9 @@ def run_completion(
         D_reference = project_to_marginals_masked(D_reference, L_true, W_true, allowed, n_iters=80)
 
     # Маршрутный граф
-    csr, edge_cost = build_dense_graph(D_reference.shape[0])
+    if csr == None or edge_cost == None:
+        csr, edge_cost = build_dense_graph(D_reference.shape[0])
+
 
     # Параметры для Франк-Вульфа решения модели Бекмана
     fw_hard_kwargs = {
@@ -141,10 +150,36 @@ def run_completion(
 
     return results
 
+import pandas as pd
 
 def main():
-    observed_fraction = 1                           # доля известных потоков
-    D_reference_true = load_od_matrix(OD_PATH)      # известная матрица корреспонденций
+    # OD matrix
+    dem = pd.read_csv(demand_file)
+    zones = int(max(dem.O.max(), dem.D.max()))
+    index = np.arange(zones) + 1
+    D_reference_true = np.zeros(shape=(zones, zones))
+    for element in dem.to_records(index=False):
+        D_reference_true[element[0]-1][element[1]-1] = element[2]
+    
+    # Network itsels
+    net = pd.read_csv(net_file, skiprows=2, sep="\t", lineterminator=";", header=None)
+    net.columns = ["newline", "a_node", "b_node", "capacity", "length", "free_flow_time", "b", "power", "speed", "toll", "link_type", "terminator"]
+    net.drop(columns=["newline", "terminator"], index=[76], inplace=True)
+    network = net[['a_node', 'b_node', "capacity", 'free_flow_time']]
+
+    network = network.assign(direction=1)
+    network["link_id"] = network.index
+    network = network.astype({"a_node":"int64", "b_node": "int64"})
+ 
+    graph = CSRGraph.from_edges(n_nodes=24, tail=network['a_node'].to_numpy() - 1, head=network['b_node'].to_numpy() - 1)
+
+    edge_cost = BRP(cap=network['capacity'].to_numpy(), 
+                    t0=network['free_flow_time'].to_numpy(),
+                    alpha=0.15, beta=4)
+    
+    
+    observed_fraction = 0.8                           # доля известных потоков
+
     # modes = ("hard", "soft_grad", "auto_soft")      # режимы работы зеркального спуска
     modes = ("hard", )      # режимы работы зеркального спуска
 
@@ -152,10 +187,17 @@ def main():
     results = run_completion(
         D_reference_true,
         modes,
+        csr=graph, edge_cost=edge_cost,
         observed_fraction=observed_fraction,
-        reference_noise_level=0.005,
+        reference_noise_level=0.00,
     )
 
+    np.savetxt(
+        "matrix.csv",
+        results["hard"].D_final,
+        delimiter=","
+    )
+    
     plot_history(
         {name: res.objective_history for name, res in results.items()},
         Path("plots/objective_curves.png"),
