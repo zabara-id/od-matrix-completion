@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 
-
 def beckmann_prediction(d: np.ndarray) -> np.ndarray:
     """Шаблон предсказания для модели Бекмана.
 
