@@ -185,10 +185,10 @@ def main():
         beta=4,
     )
 
-    observed_fractions = (0.1, 0.2, 0.3)
-    modes = ("hard",)
+    observed_fractions = (0.1, )
+    modes = ("hard", )
 
-    mask_modes = ("maximal_mask", )
+    # mask_modes = ("maximal_mask", )
 
     np.random.seed(42)
     results_by_label: Dict[str, MirrorDescentL1Result] = {}
@@ -225,7 +225,7 @@ def main():
     #         label = f"{observed_fraction:.0%} {mask_mode}"
     #         results_by_label[label] = res
 
-    out_dir = Path("plots_top_10_20_30_best_with_noise_ref")
+    out_dir = Path("plots_top_10_best_with_noise")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # plot_history(
@@ -243,9 +243,9 @@ def main():
         semilogy=True,
     )
     plot_history(
-        {name: res.rel_l1_ref_history for name, res in results_by_label.items()},
+        {name: res.rel_l1_true_history for name, res in results_by_label.items()},
         out_dir / "rel_matrix_error.png",
-        r"$|| \ D_k - D_{ref}\ ||_1 \  / \  || \ D_{ref} \ ||_1$",
+        r"$|| \ D_k - D_{true}\ ||_1 \  / \  || \ D_{true} \ ||_1$",
         "relative L1 error",
         semilogy=True,
     )
