@@ -4,7 +4,7 @@ from typing import Callable, Dict, Literal, Optional, Tuple
 
 import numpy as np
 
-from mirror_descent_completion import project_to_marginals_masked
+from mirror_descent_completion_kl import project_to_marginals_masked
 from optimize_results_l1_dto import MirrorDescentL1Result
 from src.od_matrix_completion.core.models.manyalli_written_beckmann import (
     BRP,
@@ -74,6 +74,7 @@ def mirror_descent_completion_l1(
     В качестве зеркального шага используется энтропийная геометрия (multiplicative update),
     затем проекция на фиксированные маргиналии (из D_reference) с сохранением нулевой диагонали.
     """
+    np.random.seed(42)
     if mode not in {"hard", "soft_grad", "auto_soft"}:
         raise ValueError(f"Unknown mode={mode}")
 
@@ -115,10 +116,11 @@ def mirror_descent_completion_l1(
 
     if D_init is None:
         u, Sigma, v = np.linalg.svd(D_reference)
-        Sigma[2:-1] = Sigma[2:-1] * 2
-        Sigma[-1]=0
-        # print(Sigma)
-        D_est = project_to_marginals_masked(u @ np.diag(Sigma) @ v, L_ref, W_ref, allowed)
+        # Sigma[1:15]=0
+        # D_est = project_to_marginals_masked(u @ np.diag(Sigma) @ v, L_ref, W_ref, allowed)
+        D_est = D_reference * (1 + 70*np.random.random(D_reference.shape))
+        D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed)
+
         print("D_est - D_reference = ", np.linalg.norm(D_est - D_reference, ord=1) / np.linalg.norm(D_reference, ord=1))
     else:
         D_est = np.asarray(D_init, dtype=np.float64)

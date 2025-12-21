@@ -5,7 +5,7 @@ from typing import Dict
 
 import numpy as np
 
-from mirror_descent_completion import mirror_descent_completion
+from mirror_descent_completion_kl import mirror_descent_completion
 from optimize_results_dto import MirrorDescentResult
 from src.od_matrix_completion.core.models.manyalli_written_beckmann import (
     BRP,
@@ -150,9 +150,9 @@ def plot_history(series: Dict[str, list[float]], path: Path, title: str, ylabel:
         y = np.asarray(values, dtype=np.float64)
         x = np.arange(y.size)
         if semilogy:
-            plt.semilogy(x, y, marker="o", ms=3, label=label)
+            plt.semilogy(x, y, marker="o", ms=2, label=label)
         else:
-            plt.plot(x, y, marker="o", ms=3, label=label)
+            plt.plot(x, y, marker="o", ms=2, label=label)
 
     plt.xlabel("iteration")
     plt.ylabel(ylabel)

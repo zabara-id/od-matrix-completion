@@ -7,7 +7,7 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import differential_evolution
 
-from mirror_descent_completion import kl_value_and_grad, project_to_marginals_masked
+from mirror_descent_completion_kl import kl_value_and_grad, project_to_marginals_masked
 from subfunctions import build_dense_graph, load_od_matrix, plot_history
 from src.od_matrix_completion.core.models.manyalli_written_beckmann import fw_beckmann_flow
 

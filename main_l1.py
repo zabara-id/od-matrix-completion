@@ -8,7 +8,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
-from mirror_descent_completion import project_to_marginals_masked
+from mirror_descent_completion_kl import project_to_marginals_masked
 from mirror_descent_completion_l1 import mirror_descent_completion_l1
 from optimize_results_l1_dto import MirrorDescentL1Result
 from subfunctions import build_dense_graph, make_progress_printer, make_switch_logger, plot_history
@@ -73,15 +73,16 @@ def run_completion_l1(
 
     flow_ref = fw_beckmann_flow(csr, edge_cost, D_true, **fw_hard_kwargs)
 
-    # rng_mask = np.random.default_rng(int(mask_seed))
-    # mask = (rng_mask.random(flow_ref.shape) < float(observed_fraction)).astype(np.float64)
-    # if mask.sum() == 0:
-    #     mask[0] = 1.0
 
-    # можно тут играться с тем куда ставить датчики
-    indexes = np.argsort(flow_ref)
-    mask = np.zeros(flow_ref.shape)
-    mask[indexes[-10:]] = 1
+    rng_mask = np.random.default_rng(42)
+    mask = (rng_mask.random(flow_ref.shape) < float(observed_fraction)).astype(np.float64)
+    if mask.sum() == 0:
+        mask[0] = 1.0
+
+    # # можно тут играться с тем куда ставить датчики
+    # indexes = np.argsort(flow_ref)
+    # mask = np.zeros(flow_ref.shape)
+    # mask[indexes[-10:]] = 1
 
     f_hat = flow_ref.copy()
     if float(flow_noise_level) > 0.0:
@@ -170,7 +171,7 @@ def main():
 
     nx.draw(graph.to_networkx())
     plt.gcf().suptitle("Икша")
-    plt.show()
+    # plt.show()
 
     edge_cost = BRP(
         cap=network["capacity"].to_numpy(),
@@ -179,43 +180,47 @@ def main():
         beta=4,
     )
 
-    observed_fraction = 0.1
+    observed_fractions = np.arange(0.1, 1, 0.2)
     modes = ("hard",)
 
-    results = run_completion_l1(
-        D_true,
-        modes,
-        csr=graph,
-        n_iters=100,
-        edge_cost=edge_cost,
-        observed_fraction=float(observed_fraction),
-        reference_noise_level=0.3,
-        reg_lambda=5e2,
-    )
-
-    # np.savetxt("matrix_l1.csv", results["hard"].D_final, delimiter=",")
+    np.random.seed(42)
+    results_by_label: Dict[str, MirrorDescentL1Result] = {}
+    for observed_fraction in observed_fractions:
+        results = run_completion_l1(
+            D_true,
+            modes,
+            csr=graph,
+            n_iters=80,
+            edge_cost=edge_cost,
+            observed_fraction=float(observed_fraction),
+            reference_noise_level=0.0,
+            reg_lambda=5e2,
+        )
+        for mode, res in results.items():
+            label = f"obs={observed_fraction:.0%}"
+            results_by_label[label] = res
 
     out_dir = Path("plots_l1")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # plot_history(
+    #     {name: res.objective_history for name, res in results_by_label.items()},
+    #     out_dir / "objective_curves.png",
+    #     r"$|| \  f(D) - \hat{f}  \ ||_2^2 + \lambda\cdot|| \ D - D_{ref}  \ ||_1$",
+    #     "objective",
+    #     semilogy=True,
+    # )
     plot_history(
-        {name: res.objective_history for name, res in results.items()},
-        out_dir / "objective_curves.png",
-        f"Objective = data + λ·||D - D_true||_1 (observed {observed_fraction:.0%} flows)",
-        "objective",
-        semilogy=True,
-    )
-    plot_history(
-        {name: res.data_history for name, res in results.items()},
+        {name: res.data_history for name, res in results_by_label.items()},
         out_dir / "relative_flow_error.png",
-        f"|| f(D) - f_hat ||_1 / || f_hat ||_1 (observed {observed_fraction:.0%})",
+        r"$|| \  f(D) - \hat{f} \  ||_1  \ /  \ || \  \hat{f} \ ||_1$",
         "data",
         semilogy=True,
     )
     plot_history(
-        {name: res.rel_l1_ref_history for name, res in results.items()},
+        {name: res.rel_l1_ref_history for name, res in results_by_label.items()},
         out_dir / "rel_matrix_error.png",
-        f"||D_k - D_ref||_1 / ||D_ref||_1 (observed {observed_fraction:.0%})",
+        r"$|| \ D_k - D_{ref}\ ||_1 \  / \  || \ D_{ref} \ ||_1$",
         "relative L1 error",
         semilogy=True,
     )

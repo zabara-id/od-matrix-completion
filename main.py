@@ -6,7 +6,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 from subfunctions import *
-from mirror_descent_completion import mirror_descent_completion, project_to_marginals_masked
+from mirror_descent_completion_kl import mirror_descent_completion, project_to_marginals_masked
 from optimize_results_dto import MirrorDescentResult
 from src.od_matrix_completion.core.models.manyalli_written_beckmann import fw_beckmann_flow
 
