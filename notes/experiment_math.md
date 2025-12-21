@@ -250,15 +250,33 @@ $$
 
 #### 2.1. Вариация количества наблюдаемых потоков на случайных рёбрах
 
+![описание](../plots_random_mask/relative_flow_error.png)
+
+
+![описание](../plots_random_mask/rel_matrix_error.png)
+
 #### 2.2. Вариация выбора конкретных рёбер для лучшего качества восстановления
+
+![описание](../plots_top_worst_random_obs/relative_flow_error.png)
+
+![описание](../plots_top_worst_random_obs/rel_matrix_error.png)
+
 
 ### 3. Референсная матрица $D_{ref}$ не совпадает с $D_{true}$
 
 Референсная матрица $D_{ref}$ зашумлена на 20%.
 
-#### 3.1. Вариация количества наблюдаемых потоков на случайных рёбрах
+#### 3.1. Топ 10% наблюдаемых рёбер
 
-#### 3.2. Вариация выбора конкретных рёбер для лучшего качества восстановления
+![описание](../plots_top_10_best_with_noise/relative_flow_error.png)
+
+![описание](../plots_top_10_best_with_noise/rel_matrix_error.png)
+
+#### 3.2. Вариация выбора топ $p$ рёбер для лучшего качества восстановления
+
+![описание](../plots_top_10_20_30_best_with_noise_ref/relative_flow_error.png)
+
+![описание](../plots_top_10_20_30_best_with_noise_ref/rel_matrix_error.png)
 
 ### Сравнение с вундервафлей
 
