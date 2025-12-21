@@ -26,15 +26,15 @@ def run_completion_l1(
     csr: CSRGraph | None = None,
     edge_cost: BRP | None = None,
     observed_fraction: float = 0.15,
-    reference_noise_level: float = 0.005,
+    reference_noise_level: float = 0.,
     reg_lambda: float = 1e-3,
     md_step0: float = 1e-2,
     theta: float = 10.0,
-    mask_seed: int = 123,
     preserve_true_marginals: bool = True,
     flow_noise_level: float = 0.0,
     flow_noise_seed: int = 123,
     n_iters: int = 30,
+    mask_mode: str = "random_mask"
 ) -> Dict[str, MirrorDescentL1Result]:
     """
     Запускает эксперимент по восстановлению OD-матрицы по частично наблюдаемым потокам.
@@ -73,16 +73,21 @@ def run_completion_l1(
 
     flow_ref = fw_beckmann_flow(csr, edge_cost, D_true, **fw_hard_kwargs)
 
-
-    rng_mask = np.random.default_rng(42)
-    mask = (rng_mask.random(flow_ref.shape) < float(observed_fraction)).astype(np.float64)
-    if mask.sum() == 0:
-        mask[0] = 1.0
-
-    # # можно тут играться с тем куда ставить датчики
-    # indexes = np.argsort(flow_ref)
-    # mask = np.zeros(flow_ref.shape)
-    # mask[indexes[-10:]] = 1
+    if mask_mode == "random_mask":
+        rng_mask = np.random.default_rng(42)
+        mask = (rng_mask.random(flow_ref.shape) < float(observed_fraction)).astype(np.float64)
+        if mask.sum() == 0:
+            mask[0] = 1.0
+    elif mask_mode == "maximal_mask":
+        top_idx = int(observed_fraction*100)
+        indexes = np.argsort(flow_ref)
+        mask = np.zeros(flow_ref.shape)
+        mask[indexes[-top_idx:]] = 1
+    elif mask_mode == "minimal_mask":
+        top_idx = int(observed_fraction*100)
+        indexes = np.argsort(flow_ref)
+        mask = np.zeros(flow_ref.shape)
+        mask[indexes[:top_idx]] = 1
 
     f_hat = flow_ref.copy()
     if float(flow_noise_level) > 0.0:
@@ -180,8 +185,10 @@ def main():
         beta=4,
     )
 
-    observed_fractions = np.arange(0.1, 1, 0.2)
+    observed_fractions = (0.1, 0.2, 0.3)
     modes = ("hard",)
+
+    mask_modes = ("maximal_mask", )
 
     np.random.seed(42)
     results_by_label: Dict[str, MirrorDescentL1Result] = {}
@@ -190,17 +197,35 @@ def main():
             D_true,
             modes,
             csr=graph,
-            n_iters=80,
+            n_iters=40,
             edge_cost=edge_cost,
             observed_fraction=float(observed_fraction),
-            reference_noise_level=0.0,
+            reference_noise_level=0.2,
             reg_lambda=5e2,
+            mask_mode="maximal_mask"
         )
-        for mode, res in results.items():
-            label = f"obs={observed_fraction:.0%}"
+        for _, res in results.items():
+            label = f"obs={observed_fraction:.0%} max flows"
             results_by_label[label] = res
+    
+    # results_by_label: Dict[str, MirrorDescentL1Result] = {}
+    # for mask_mode in mask_modes:
+    #     results = run_completion_l1(
+    #         D_true,
+    #         modes,
+    #         csr=graph,
+    #         n_iters=450,
+    #         mask_mode=mask_mode,
+    #         edge_cost=edge_cost,
+    #         observed_fraction=float(observed_fraction),
+    #         reference_noise_level=0.0,
+    #         reg_lambda=5e2,
+    #     )
+    #     for _, res in results.items():
+    #         label = f"{observed_fraction:.0%} {mask_mode}"
+    #         results_by_label[label] = res
 
-    out_dir = Path("plots_l1")
+    out_dir = Path("plots_top_10_20_30_best_with_noise_ref")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # plot_history(

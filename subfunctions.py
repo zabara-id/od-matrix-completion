@@ -158,6 +158,21 @@ def plot_history(series: Dict[str, list[float]], path: Path, title: str, ylabel:
     plt.ylabel(ylabel)
     plt.title(title)
     plt.grid(True, which="both", ls="--", alpha=0.6)
+    if semilogy:
+        import matplotlib.ticker as mticker
+
+        ax = plt.gca()
+        ax.yaxis.set_major_locator(mticker.LogLocator(base=10.0, numticks=12))
+        ax.yaxis.set_minor_locator(
+            mticker.LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1, numticks=100)
+        )
+        log_fmt = mticker.LogFormatterMathtext(base=10.0, labelOnlyBase=False)
+        # Force labels on *all* minor ticks (matplotlib may hide them by default).
+        if hasattr(log_fmt, "minor_thresholds"):
+            log_fmt.minor_thresholds = (0, 0)
+        ax.yaxis.set_major_formatter(log_fmt)
+        ax.yaxis.set_minor_formatter(log_fmt)
+        ax.tick_params(axis="y", which="minor", labelleft=True, labelsize=8)
     plt.legend()
     plt.tight_layout()
     plt.savefig(path, dpi=150)
