@@ -89,8 +89,8 @@ def mirror_descent_completion_l1(
     allowed = np.ones((n, n), dtype=np.float64)
     np.fill_diagonal(allowed, 0.0)
 
-    L_ref = D_reference.sum(axis=1)
-    W_ref = D_reference.sum(axis=0)
+    L_ref = D_true.sum(axis=1)
+    W_ref = D_true.sum(axis=0)
     ref_l1 = float(np.sum(np.abs(D_reference * allowed)))
     true_l1 = float(np.sum(np.abs(D_true * allowed)))
 
@@ -114,7 +114,7 @@ def mirror_descent_completion_l1(
         if mask.shape != f_hat.shape:
             raise ValueError(f"mask shape {mask.shape} must match flow shape {f_hat.shape}")
 
-    D_reference = project_to_marginals_masked(D_reference, L_ref, W_ref, allowed)
+    # D_reference = project_to_marginals_masked(D_reference, L_ref, W_ref, allowed)
 
     if D_init is None:
         u, Sigma, v = np.linalg.svd(D_true)
@@ -124,7 +124,7 @@ def mirror_descent_completion_l1(
         # D_est = D_reference * (1 + 70*np.random.random(D_reference.shape))
         # D_est = project_to_marginals_masked(D_est, L_ref, W_ref, allowed)
 
-        print("D_est - D_reference = ", np.linalg.norm(D_est - D_reference, ord=1) / np.linalg.norm(D_reference, ord=1))
+        print("D_est - D_true = ", np.linalg.norm(D_est - D_true, ord=1) / np.linalg.norm(D_true, ord=1))
 
         print("D_reference - D_true = ", np.linalg.norm(D_reference - D_true, ord=1) / np.linalg.norm(D_reference, ord=1))
     else:

@@ -61,6 +61,8 @@ def run_completion_l1(
     if csr is None or edge_cost is None:
         csr, edge_cost = build_dense_graph(D_reference.shape[0])
 
+    D_reference = np.zeros(D_reference.shape)
+
     fw_hard_kwargs = {"max_iter": 200, "rgap_target": 1e-3, "verbose": False, "use_numba": True}
     fw_soft_kwargs = {
         "max_iter": 200,
@@ -185,7 +187,7 @@ def main():
         beta=4,
     )
 
-    observed_fractions = (0.1, )
+    observed_fractions = (0.5, )
     modes = ("hard", )
 
     # mask_modes = ("maximal_mask", )
@@ -200,8 +202,8 @@ def main():
             n_iters=40,
             edge_cost=edge_cost,
             observed_fraction=float(observed_fraction),
-            reference_noise_level=0.2,
-            reg_lambda=5e2,
+            reference_noise_level=0.1,
+            reg_lambda=0,
             mask_mode="maximal_mask"
         )
         for _, res in results.items():
@@ -225,7 +227,7 @@ def main():
     #         label = f"{observed_fraction:.0%} {mask_mode}"
     #         results_by_label[label] = res
 
-    out_dir = Path("plots_top_10_best_with_noise")
+    out_dir = Path("plots_lol_l")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # plot_history(
